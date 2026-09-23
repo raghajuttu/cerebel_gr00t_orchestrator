@@ -1,0 +1,31 @@
+# Base motion alone: left, back, right, back. No policy, no arm motion.
+#
+# This is the first mission to run on real hardware. It exercises Nav2, the base
+# adapter, the interlock heartbeat and the station poses without any risk from
+# the arms -- park is a no-op while enable_park is false, and there is no policy
+# phase at all.
+#
+#   ros2 launch cerebel_orchestrator orchestrator.launch.py \
+#       mission:=<share>/missions/nav_only.yaml
+
+name: nav_only
+frame_id: odom
+
+stations:
+  home:  {x: 0.0, y:  0.0,  yaw: 0.0}
+  left:  {x: 0.0, y:  0.45, yaw: 0.0}
+  right: {x: 0.0, y: -0.45, yaw: 0.0}
+
+policies: {}
+
+steps:
+  - {step: park_arms, profile: travel}
+  - {step: navigate, station: left}
+  - {step: wait, seconds: 2.0}
+  - {step: navigate, station: home}
+  - {step: wait, seconds: 2.0}
+  - {step: navigate, station: right}
+  - {step: wait, seconds: 2.0}
+  - {step: navigate, station: home}
+
+repeat: 1

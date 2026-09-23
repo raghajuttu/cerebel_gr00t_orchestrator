@@ -1,0 +1,96 @@
+# Autonomous pick-and-place across two stations, one lateral base move apart.
+#
+# The shape of the task: park, drive left to the pick station, run the pick
+# policy until the gripper closes on the object, park, drive right to the place
+# station, run the place policy until the gripper opens, park.
+#
+# Numbers to replace before running:
+#   * station x/y/yaw       -- metres and radians in the `frame_id` frame, which
+#                              with the no-SLAM configuration is `odom`, i.e.
+#                              measured from wherever the base was powered on
+#   * task_description      -- must match the training annotation VERBATIM
+#   * server_host/port      -- the GPU box, or 127.0.0.1 through an SSH forward
+#   * timeout_s             -- generous enough for a slow attempt, short enough
+#                              that a failed one does not sit there for minutes
+
+name: two_station_pick_place
+frame_id: odom
+
+stations:
+  # `home` is the pose the base starts from: with odometry-only localisation,
+  # (0, 0, 0) is by definition where the wheels were when the driver came up.
+  home:  {x: 0.0, y:  0.0, yaw: 0.0}
+  pick:  {x: 0.0, y:  0.45, yaw: 0.0}
+  place: {x: 0.0, y: -0.45, yaw: 0.0}
+
+policies:
+  # Two prompts, one served checkpoint -- the common case with a single
+  # fine-tune. If you later train a separate place policy, give it its own port
+  # and run a second policy server on the GPU box.
+  pick_cube:
+    task_description: "pick up the green cube and place it in the box"
+    server_host: 127.0.0.1
+    server_port: 5555
+    checkpoint_label: "adibot-green-pick"
+    params:
+      execution_horizon: 16
+      prefetch_enable: true
+      rtc_enable: false
+      # Limits off matches the validated configuration in
+      # adibot_gr00t_client docs/VALIDATION.md; turn them on with a limits_file
+      # extracted from the dataset once the task is reliable.
+      enable_limits: false
+      enable_right_arm: false
+      enable_right_gripper: false
+
+  place_cube:
+    task_description: "pick up the green cube and place it in the box"
+    server_host: 127.0.0.1
+    server_port: 5555
+    checkpoint_label: "adibot-green-pick"
+    params:
+      execution_horizon: 16
+      prefetch_enable: true
+      rtc_enable: false
+      enable_limits: false
+      enable_right_arm: false
+      enable_right_gripper: false
+
+steps:
+  # Park first: the mission cannot know what the arms were doing before it
+  # started, and step 1 moves the base.
+  - {step: park_arms, profile: travel}
+
+  - {step: navigate, station: pick, on_fail: retry, retries: 2}
+
+  # Put the arms where the training episodes began, so the policy's first
+  # observation is in distribution.
+  - {step: park_arms, profile: ready}
+
+  # The pick ends when the left gripper closes and stays closed for half a
+  # second. If it never does, the phase fails at 90 s and says what the finger
+  # was doing -- which is the information you need to fix either the policy or
+  # the thresholds.
+  - step: run_policy
+    policy: pick_cube
+    until: {timeout_s: 90.0, grasp: closed, side: left, hold_s: 0.5}
+    on_fail: retry
+    retries: 1
+
+  - {step: park_arms, profile: travel}
+
+  - {step: navigate, station: place, on_fail: retry, retries: 2}
+
+  - {step: park_arms, profile: ready}
+
+  # The place ends when the gripper opens again.
+  - step: run_policy
+    policy: place_cube
+    until: {timeout_s: 90.0, grasp: open, side: left, hold_s: 0.5}
+    on_fail: abort
+
+  - {step: park_arms, profile: travel}
+  - {step: navigate, station: home, on_fail: continue}
+  - {step: park_arms, profile: rest}
+
+repeat: 1

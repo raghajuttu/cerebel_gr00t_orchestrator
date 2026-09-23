@@ -1,0 +1,5 @@
+Proprietary — Copyright (c) Cerebel. All rights reserved.
+
+This repository orchestrates, but does not contain, NVIDIA Isaac GR00T
+(Apache-2.0) and ROS 2 / Nav2 (Apache-2.0). Those projects keep their own
+licences where they are used.

@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cerebel_orchestrator</name>
+  <version>0.1.0</version>
+  <description>
+    Task-level orchestrator for an autonomous bimanual pick-and-place on a
+    mobile base: drives the base with Nav2 (no SLAM), switches GR00T N1.7
+    policies per phase, and enforces that the base and the arms never move at
+    the same time.
+
+    The GR00T inference client itself is NOT part of this package -- the
+    validated adibot_gr00t_client is driven as a child process, unmodified.
+  </description>
+  <maintainer email="thoppay@cerebel.co">cerebel</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <!-- Nav2 is a runtime dependency of the bringup launch files only; it is
+       listed so rosdep installs it on the robot computer. -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

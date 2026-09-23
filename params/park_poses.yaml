@@ -1,0 +1,48 @@
+# Arm poses the base is safe to drive with.
+#
+# EVERY NUMBER HERE IS A PLACEHOLDER. Zero on the OpenArm is the arm straight
+# out, which is the worst possible travel pose -- these values exist so the file
+# parses, not so the robot uses them.
+#
+# How to fill it in, per profile:
+#   1. With the arms powered and NO policy running, hand-guide or jog the arms to
+#      a tucked pose that clears the base envelope.
+#   2. Read the pose off /joint_states in canonical order:
+#        ros2 topic echo --once /joint_states
+#      and reorder by name -- the message is scrambled.
+#   3. Paste the 7 arm values per side here; gripper values are finger positions
+#      in metres, the same units the GripperCommand action takes.
+#   4. Check it from several starting poses with:
+#        ros2 run cerebel_orchestrator arm_park --ros-args \
+#            -p enable_park:=true -p profile:=travel \
+#            -p park_poses_file:=<this file> -p max_joint_speed:=0.05
+#      The ramp is a straight line in joint space with no collision checking, so
+#      a pose is only usable if every joint can move monotonically to it from
+#      anywhere the policy can leave the arm.
+#
+# Joint order per arm: joint1 .. joint7, base to wrist.
+
+profiles:
+  travel:
+    # Tucked for driving: elbows down, wrists in, grippers closed so nothing
+    # dangles or catches.
+    left_arm:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    right_arm: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    left_gripper: 0.0
+    right_gripper: 0.0
+
+  rest:
+    # End-of-mission pose: whatever is kindest to the motors when they go slack.
+    left_arm:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    right_arm: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    left_gripper: 0.04
+    right_gripper: 0.04
+
+  ready:
+    # Where the pick policy's training episodes started. Parking here before a
+    # policy phase puts the arms inside the distribution the policy was trained
+    # on, instead of wherever the previous phase ended.
+    left_arm:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    right_arm: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    left_gripper: 0.04
+    right_gripper: 0.04

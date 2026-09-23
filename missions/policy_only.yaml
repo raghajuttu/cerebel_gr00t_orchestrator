@@ -1,0 +1,34 @@
+# One policy phase, no base motion.
+#
+# The second mission to run: it proves the orchestrator can start the validated
+# inference client, watch the gripper, and stop the client cleanly -- on a robot
+# standing still. Compare the run log it writes against a log from running the
+# client by hand; they should be indistinguishable apart from the run name.
+
+name: policy_only
+frame_id: odom
+
+stations: {}
+
+policies:
+  pick_cube:
+    task_description: "pick up the green cube and place it in the box"
+    server_host: 127.0.0.1
+    server_port: 5555
+    checkpoint_label: "adibot-green-pick"
+    params:
+      execution_horizon: 16
+      prefetch_enable: true
+      rtc_enable: false
+      enable_limits: false
+
+steps:
+  # `operator: true` hands the decision to you: the phase ends when you call
+  #   ros2 service call /orchestrator/advance std_srvs/srv/Trigger
+  # or fails on /orchestrator/skip. Use this to watch one attempt closely before
+  # trusting an automatic condition.
+  - step: run_policy
+    policy: pick_cube
+    until: {timeout_s: 120.0, operator: true}
+
+repeat: 1

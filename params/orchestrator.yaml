@@ -1,0 +1,84 @@
+# The orchestrator's own parameters.
+#
+# Anything marked MEASURE is a placeholder that must be replaced with a number
+# read off the real robot before the mission is trusted. See docs/TUNING.md.
+
+orchestrator:
+  ros__parameters:
+    # Set on the command line, not here: mission_file.
+    auto_start: false            # true starts on launch; false waits for ~/start
+    tick_rate_hz: 10.0
+    shutdown_when_done: true
+    # Rehearsal switches, independently settable. The launch file's dry_run:=true
+    # sets both. mock_policy starts no inference client; mock_nav sends no Nav2
+    # goal and a navigate step simply succeeds.
+    mock_policy: false
+    mock_nav: false
+
+    # -- navigation ---------------------------------------------------------
+    nav_action: navigate_to_pose
+    nav_timeout_s: 120.0
+    nav_server_wait_s: 20.0
+
+    # -- policies -----------------------------------------------------------
+    # The command that runs one policy session. Each phase appends its own
+    # --ros-args -p ... to this. Change it to point at a different package, or
+    # wrap it in `bash -lc "source ...; ros2 run ..."` if the orchestrator is
+    # started from an environment that has not sourced the workspace.
+    policy_cmd: ["ros2", "run", "adibot_gr00t_client", "inference_client"]
+    log_dir: "~/adibot_logs"
+    # How long the client is allowed to take to connect to the policy server
+    # before a missing /joint_states counts against it.
+    policy_startup_grace_s: 20.0
+
+    # -- when a policy phase is done (MEASURE all four) ---------------------
+    # Finger joint positions in metres, read off a run log: empty-and-open,
+    # closed-on-the-object, released. Put the thresholds either side of the gap.
+    grasp_close_m: 0.010
+    grasp_open_m: 0.030
+    # Per-tick joint motion below this counts as "not moving" for `settled`.
+    motion_eps: 0.004
+    settle_grace_s: 3.0
+    # A policy phase fails if /joint_states goes quiet for this long.
+    stale_state_s: 1.0
+
+    # -- parking (arms) -----------------------------------------------------
+    # OFF by default. Read docs/SAFETY.md and check every pose in
+    # params/park_poses.yaml on the real robot before turning this on.
+    enable_park: false
+    park_poses_file: ""          # "" -> the built-in all-zeros fallback
+    max_joint_speed: 0.15        # rad/s, per joint, linear ramp
+    park_tolerance: 0.01         # rad, worst single joint, to call it parked
+    park_timeout_s: 60.0
+    gripper_max_effort: 10.0     # matches the inference client's validated value
+    command_grippers: true
+
+    # -- interfaces ---------------------------------------------------------
+    estop_topic: /orchestrator/estop
+    base_enable_topic: /orchestrator/base_enable
+    status_topic: /orchestrator/status
+
+base_adapter:
+  ros__parameters:
+    # Replace this whole block with what `probe_robot` wrote. The defaults are
+    # the Nav2-standard names and will be wrong on most vendor chassis.
+    nav_cmd_topic: /cmd_vel
+    base_cmd_topic: /base/cmd_vel
+    base_cmd_type: Twist         # or TwistStamped
+    vendor_odom_topic: /odom
+    odom_topic: ""               # "" -> do not republish odometry
+    odom_frame: odom
+    base_frame: base_link
+    publish_odom_tf: false       # true if the vendor driver publishes no TF
+
+    # The interlock. require_enable: false disables it -- bring-up only.
+    enable_topic: /orchestrator/base_enable
+    enable_timeout_s: 0.5
+    cmd_timeout_s: 0.5
+    zero_rate_hz: 20.0
+    require_enable: true
+
+    # Deliberately slow first-run limits.
+    max_linear: 0.15
+    max_angular: 0.4
+    allow_lateral: false         # true ONLY for a mecanum/omni base
