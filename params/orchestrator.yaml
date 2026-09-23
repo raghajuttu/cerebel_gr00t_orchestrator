@@ -38,6 +38,11 @@ orchestrator:
     # How long the client is allowed to take to connect to the policy server
     # before a missing /joint_states counts against it.
     policy_startup_grace_s: 20.0
+    # Ping every policy server the mission uses, once, before anything moves.
+    # Over an SSH forward the local port accepts connections whenever the tunnel
+    # process is alive, so only a round trip proves the GPU box is there.
+    policy_preflight: true
+    preflight_timeout_ms: 5000
 
     # -- when a policy phase is done (MEASURE all four) ---------------------
     # Finger joint positions in metres, read off a run log: empty-and-open,

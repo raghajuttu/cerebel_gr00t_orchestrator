@@ -7,7 +7,7 @@ how a bad station pose gets blamed on the policy.
 ## 0. Build and validate, anywhere
 
 ```bash
-python -m pytest tests -q                        # 87 tests, no ROS needed
+python -m pytest tests -q                        # 96 tests, no ROS needed
 python -m cerebel_orchestrator.mission missions/*.yaml
 ```
 
@@ -102,12 +102,19 @@ grasp's error budget.
 ## 5. The policy alone, no base motion
 
 ```bash
-# on the GPU box: start the policy server on 5555
-# on the robot: open the SSH forward, then
+# on cthor: start the policy server on 5555
+# on the robot: open the SSH forward, then prove it end to end
+ros2 run cerebel_orchestrator ping_policy 127.0.0.1:5555
+
 ros2 launch cerebel_orchestrator orchestrator.launch.py \
     mission:=policy_only use_nav2:=false
 ros2 service call /orchestrator/start std_srvs/srv/Trigger
 ```
+
+`ping_policy` is the same round trip the orchestrator's preflight makes before a
+mission starts. A forward accepts connections whenever `autossh` is alive, so
+this is the only check that tells "the tunnel is up" apart from "the GPU box is
+answering".
 
 The phase is `operator: true`, so it runs until you call `~/advance` or `~/skip`.
 

@@ -45,6 +45,7 @@ from .joints import reorder_by_name
 from .mission import Mission, MissionError, navigate_safety_warnings
 from .nav_client import NavClient
 from .phase_monitor import MonitorConfig, PhaseMonitor
+from .policy_preflight import failures, preflight, summary
 from .policy_runner import PolicyRunner, RunnerConfig, describe_command
 from .state_machine import Action, MissionRunner, Phase
 
@@ -86,6 +87,9 @@ class OrchestratorNode(Node):
         )
         self.declare_parameter("log_dir", "~/adibot_logs")
         self.declare_parameter("policy_startup_grace_s", 20.0)
+        # Ping every policy server once, at mission start, before anything moves.
+        self.declare_parameter("policy_preflight", True)
+        self.declare_parameter("preflight_timeout_ms", 5000)
 
         # Phase termination -- measure these off a real run before trusting them
         self.declare_parameter("grasp_close_m", 0.010)
@@ -118,6 +122,8 @@ class OrchestratorNode(Node):
         self.nav_timeout_s = float(get("nav_timeout_s").value)
         self.park_timeout_s = float(get("park_timeout_s").value)
         self.policy_startup_grace_s = float(get("policy_startup_grace_s").value)
+        self.policy_preflight = bool(get("policy_preflight").value)
+        self.preflight_timeout_ms = int(get("preflight_timeout_ms").value)
         self.shutdown_when_done = bool(get("shutdown_when_done").value)
 
         self.monitor_config = MonitorConfig(
@@ -255,6 +261,8 @@ class OrchestratorNode(Node):
     def _begin_mission(self, why: str) -> None:
         if self.runner.terminal:
             return
+        if not self._preflight_ok():
+            return
         if not self._nav_ready and self._needs_nav():
             wait = float(self.get_parameter("nav_server_wait_s").value)
             self._nav_ready = self.nav.server_ready(wait)
@@ -266,6 +274,22 @@ class OrchestratorNode(Node):
                 return
         self.get_logger().info(f"mission start ({why})")
         self.runner.start()
+
+    def _preflight_ok(self) -> bool:
+        """Prove the policy server answers before the robot commits to anything.
+
+        A mission with no policy phases skips this. So does ``mock_policy``,
+        which has no server to reach.
+        """
+        if not self.policy_preflight or self.mock_policy or not self.mission.policies:
+            return True
+        results = preflight(
+            self.mission.policy_ports(), self.preflight_timeout_ms, self.get_logger()
+        )
+        if not failures(results):
+            return True
+        self.runner.fault(f"policy server preflight failed -- {summary(results)}")
+        return False
 
     def _needs_nav(self) -> bool:
         if self.mock_nav:

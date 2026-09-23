@@ -6,7 +6,7 @@ package_name = "cerebel_orchestrator"
 
 setup(
     name=package_name,
-    version="0.3.0",
+    version="0.4.0",
     packages=[package_name],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -31,6 +31,7 @@ setup(
             "fake_base = cerebel_orchestrator.fake_base:main",
             "fake_arm = cerebel_orchestrator.fake_arm:main",
             "mission_check = cerebel_orchestrator.mission:main",
+            "ping_policy = cerebel_orchestrator.policy_preflight:main",
         ],
     },
 )

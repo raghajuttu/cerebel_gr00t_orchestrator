@@ -7,6 +7,29 @@ adapter, the parker, the phase monitor — does not ship without an entry here.
 The format follows `adibot_gr00t_client/docs/VALIDATION.md`: what ran, on what,
 with which parameters, and what was observed.
 
+## v0.4.0 — 2026-09-23
+
+**Proven on hardware: nothing.** Fitted to the one-checkpoint-on-cthor
+deployment; see the changelog.
+
+Proven in unit tests (96 total) — new in this release,
+`tests/test_policy_preflight.py`:
+
+| Area | What the tests cover |
+|---|---|
+| address parsing | `host:port`, bare host, bare port, whitespace, empty |
+| one ping per server | two prompts against one checkpoint ping it once; two checkpoints are pinged separately |
+| failure reporting | a dead server is named with its address and reason; one dead server among several is identified |
+| the logger | one line per server, naming the policies that would have used it |
+| robustness | a missing `pyzmq` is a reported failure, never an import crash |
+
+**Not proven:** the ping against a real policy server. The protocol is copied
+from the vendored client in `adibot_gr00t_client` (`{"endpoint": "ping"}`,
+msgpack with `msgpack_numpy` hooks) and matches its framing byte for byte, but
+nothing has exchanged a message with cthor yet. Step 5 of
+[BRINGUP.md](BRINGUP.md) is where that gets confirmed, with
+`ros2 run cerebel_orchestrator ping_policy`.
+
 ## v0.3.0 — 2026-09-23
 
 **Proven on hardware: nothing.** Split into an execution loop and a supervision

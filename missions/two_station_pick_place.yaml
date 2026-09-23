@@ -34,9 +34,26 @@ stations:
   place: {x: 0.0, y: -0.45, yaw: 0.0}
 
 policies:
-  # Two prompts, one served checkpoint -- the common case with a single
-  # fine-tune. Give the place policy its own port once it is a separate
-  # checkpoint, and run a second policy server on the GPU box.
+  # ONE checkpoint, two prompts. Both entries point at the same
+  # server_host:server_port, which is the local end of the SSH forward to cthor;
+  # the orchestrator prints the grouping at startup so this is visible before
+  # anything moves.
+  #
+  # BEFORE TRUSTING TWO DIFFERENT PROMPTS: check what the checkpoint was
+  # fine-tuned on.
+  #
+  #     wc -l <dataset>/meta/tasks.jsonl
+  #
+  # If that is one line, the policy only ever saw one annotation, and a second
+  # prompt here is a string it has never been conditioned on -- the behaviour
+  # you get is undefined, not "the place half of the task". In that case set
+  # both task_descriptions to that one annotation, verbatim, and let the two
+  # phases differ by their `until` conditions instead: the pick phase ends on
+  # grasp:closed, the place phase on grasp:open. Same policy, same prompt, two
+  # differently-terminated runs.
+  #
+  # Distinct prompts start earning their keep once the dataset has distinct
+  # annotations per segment, which is a data-collection change, not a config one.
   pick_cube:
     task_description: "pick up the green cube and place it in the box"
     server_host: 127.0.0.1
@@ -54,6 +71,9 @@ policies:
       enable_right_gripper: false
 
   place_cube:
+    # Same string as pick_cube on purpose -- see the note above. Change it only
+    # once the checkpoint has been trained on a separate place annotation, and
+    # then it must match that annotation verbatim.
     task_description: "pick up the green cube and place it in the box"
     server_host: 127.0.0.1
     server_port: 5555

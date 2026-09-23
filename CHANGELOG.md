@@ -3,6 +3,38 @@
 Every version, and the issue that motivated it. One logical change per commit,
 prefixed `feat:` / `fix:` / `docs:` / `chore:`.
 
+## v0.4.0 — 2026-09-23
+
+Fitted to the actual deployment: **one checkpoint on cthor, reached through an
+SSH forward, switched between phases by prompt rather than by port.**
+
+**Added**
+
+* `policy_preflight.py` — one `{"endpoint": "ping"}` round trip per distinct
+  server, at mission start, before anything moves (`policy_preflight`, on by
+  default). Without it an unreachable server is discovered by the first
+  `run_policy` step, which in the shipped mission is after the base has already
+  driven to the pick station. It matters more behind a forward: `127.0.0.1:5555`
+  accepts connections whenever the local `autossh` is alive, so `ss -tlnp` and a
+  successful `connect()` both say yes while the GPU box is gone. Only a round
+  trip proves the far end is there.
+  Also standalone: `ros2 run cerebel_orchestrator ping_policy 127.0.0.1:5555`.
+  `pyzmq`/`msgpack` are imported lazily, so a machine without them gets a clear
+  failure rather than an import error, and the tests need neither.
+
+**Changed**
+
+* `two_station_pick_place.yaml` documents the prompt-switching caveat where it
+  will be read: a GR00T policy is conditioned on the annotation it was fine-tuned
+  with, so if `meta/tasks.jsonl` has one line, a second `task_description` is a
+  string the checkpoint has never seen and the behaviour is undefined rather than
+  "the place half of the task". Both shipped policies therefore carry the same
+  annotation, and the two phases differ by their `until` conditions instead —
+  pick ends on `grasp: closed`, place on `grasp: open`.
+* `docs/POLICY_SWITCHING.md` leads with the one-checkpoint case and the cthor
+  topology (one server, one `-L`, `127.0.0.1` not `localhost`) instead of
+  treating two ports as the norm.
+
 ## v0.3.0 — 2026-09-23
 
 Split the node into the **two loops** it should always have been: one that

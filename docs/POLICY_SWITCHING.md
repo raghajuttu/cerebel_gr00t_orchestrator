@@ -35,42 +35,73 @@ this package can make a running server load a different checkpoint** — if a
 mission needs two checkpoints, two servers have to be up, on two ports, before the
 mission starts.
 
-On the GPU box that looks like:
-
-```bash
-# terminal 1 — the pick checkpoint
-python scripts/inference_service.py --server --port 5555 \
-    --model_path /path/to/checkpoint-pick   ...
-# terminal 2 — the place checkpoint
-python scripts/inference_service.py --server --port 5556 \
-    --model_path /path/to/checkpoint-place  ...
-```
-
-and through an SSH forward, one `-L` per port:
-
-```bash
-autossh -M 0 -N \
-    -L 5555:127.0.0.1:5555 \
-    -L 5556:127.0.0.1:5556 \
-    -o "ServerAliveInterval 30" -o "ExitOnForwardFailure yes" \
-    -p 3129 adibot@<gpu-box>
-```
-
-The forward destination must be `127.0.0.1`, not `localhost` — on a dual-stack
-host `localhost` can resolve to `::1` while the server binds IPv4 `0.0.0.0`, and
-the symptom is a silent ping timeout at client startup. This is recorded in the
-deployment notes for the single-policy case and applies identically per port here.
-
 The orchestrator prints the grouping at startup so a mistake is visible before
 anything moves:
 
 ```
 server 127.0.0.1:5555     : pick_cube, place_cube (ONE checkpoint, several prompts)
-server 127.0.0.1:5556     : handoff
 ```
 
-If you meant two checkpoints and see one line, the second server is not up or the
-port in the mission is wrong.
+### The current setup: one checkpoint on cthor
+
+One fine-tune, one server, one port, reached through the SSH forward from the
+robot computer:
+
+```bash
+# on cthor (inside the container, with the repo copy first on the path)
+PYTHONPATH=/workspace/repo python scripts/inference_service.py \
+    --server --port 5555 --model_path /path/to/checkpoint ...
+
+# on the robot computer -- one -L, destination 127.0.0.1, NOT localhost
+autossh -M 0 -N -L 5555:127.0.0.1:5555 \
+    -o "ServerAliveInterval 30" -o "ExitOnForwardFailure yes" \
+    -p 3129 adibot@<cthor>
+```
+
+`127.0.0.1` rather than `localhost` matters: on a dual-stack host `localhost` can
+resolve to `::1` while the server binds IPv4 `0.0.0.0`, and the symptom is a
+silent ping timeout at client startup rather than an error. `ServerAliveInterval`
+is what stops an idle forward being dropped mid-mission.
+
+Both mission policies therefore carry `server_host: 127.0.0.1, server_port: 5555`,
+and the switch between them is a client restart with a different
+`task_description` — no ports change, nothing on cthor is touched.
+
+**Check before believing that two prompts do anything.** A GR00T policy is
+conditioned on the language annotation it was fine-tuned with. If the dataset
+carried one annotation for every episode:
+
+```bash
+wc -l <dataset>/meta/tasks.jsonl     # one line -> one annotation
+```
+
+then a second, different prompt is a string the checkpoint has never seen. What
+comes back is undefined behaviour, not "the place half of the task", and it will
+look like a policy that suddenly got worse. With a single-annotation checkpoint,
+set both `task_description`s to that annotation verbatim and let the two phases
+differ by their **`until` conditions** instead — the pick phase ends on
+`grasp: closed`, the place phase on `grasp: open`. Same policy, same prompt, two
+differently-terminated runs. That is what the shipped mission does.
+
+Distinct prompts start being worth something once the dataset has distinct
+annotations per segment, which is a data-collection change rather than a
+configuration one.
+
+### Preflight
+
+The orchestrator pings every distinct server once, at mission start, before
+anything moves (`policy_preflight`, on by default). If the ping fails the mission
+faults immediately instead of driving to the pick station and discovering it
+there.
+
+This is worth more than it sounds over a forward. `127.0.0.1:5555` accepts a TCP
+connection whenever the local `autossh` process is alive, so `ss -tlnp` says yes
+even when cthor is unreachable or the server has died. Only a round trip proves
+the far end is there. The same check by hand:
+
+```bash
+ros2 run cerebel_orchestrator ping_policy 127.0.0.1:5555
+```
 
 ## What the orchestrator runs
 

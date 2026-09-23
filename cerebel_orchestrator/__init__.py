@@ -12,9 +12,10 @@ The modules split cleanly in two:
     orchestrator_node.py  the driver that ties the three together
     nav_client.py         Nav2 NavigateToPose
     policy_runner.py      starting and stopping a GR00T policy session
+    policy_preflight.py   the pre-mission ping: does the policy server answer?
     arm_park.py           ramped move of the arms to a parked pose
     base_adapter_node.py  vendor chassis topics -> the interface Nav2 expects
     probe_robot.py        read-only survey of what the robot actually exposes
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
