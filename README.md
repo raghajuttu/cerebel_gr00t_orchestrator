@@ -4,7 +4,7 @@ Task-level orchestration for an autonomous bimanual pick-and-place on a mobile
 base: **Nav2 moves the base, GR00T N1.7 policies move the arms, and this package
 decides which of them is allowed to run.**
 
-**Version 0.2.0 — nothing here has run on hardware yet.** See
+**Version 0.3.0 — nothing here has run on hardware yet.** See
 [Status](#status) for exactly what is and is not proven, and
 [docs/BRINGUP.md](docs/BRINGUP.md) for the order to prove it in.
 
@@ -62,6 +62,15 @@ orchestrator is publishing `base_enable = true`, which it does only while a
 `navigate` step is actually in flight. The gate is fail-closed on a 0.5 s timeout,
 so the base stops if this node crashes, hangs, or is killed — the interlock does
 not depend on the mission logic being right. See [docs/SAFETY.md](docs/SAFETY.md).
+
+**Two loops, one thread.** An execution loop at 30 Hz sustains whatever is
+running — the park ramp, the base-enable heartbeat — and decides nothing. A
+supervision loop at 10 Hz asks whether the current step is done and switches to
+the next, and commands nothing. Completion is fed from `/joint_states` at the
+robot's own rate, so its thresholds are speeds rather than per-tick deltas and
+stop meaning something different when a rate changes. Both loops are plain timers
+on one single-threaded executor, which is why there are no locks anywhere in this
+package. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-two-loops).
 
 **A phase ends for a stated reason.** A GR00T policy never reports success; it
 returns action chunks forever. So "the pick is done" is read off the robot — the
@@ -167,7 +176,7 @@ e-stop, which cuts power.
 | `cerebel_orchestrator/mission.py` | the mission file: parsing, strict validation, the park-before-navigate lint |
 | `cerebel_orchestrator/state_machine.py` | control flow — order, retries, repeats, what a hold does. No ROS, no clock |
 | `cerebel_orchestrator/phase_monitor.py` | when a policy phase is over: grasp, settle, timeout, and the arming rules |
-| `cerebel_orchestrator/orchestrator_node.py` | the driver: one timer, one mission, one thing moving at a time |
+| `cerebel_orchestrator/orchestrator_node.py` | the driver: the two loops, one mission, one thing moving at a time |
 | `cerebel_orchestrator/policy_runner.py` | starting and stopping one inference client; the command line it builds |
 | `cerebel_orchestrator/nav_client.py` | `NavigateToPose`, poll-shaped so nothing blocks |
 | `cerebel_orchestrator/arm_park.py` | the joint-space ramp, and a standalone node to check a pose |
@@ -196,11 +205,12 @@ e-stop, which cuts power.
 
 ## Status
 
-**v0.2.0 — written, tested in simulation of itself, never run on a robot.**
+**v0.3.0 — written, tested in simulation of itself, never run on a robot.**
 
-Proven: the pure-Python core, by 71 unit tests — mission validation, the step
+Proven: the pure-Python core, by 87 unit tests — mission validation, the step
 sequencing, retries, repeats, hold-and-resume, the grasp and settle conditions
-with their arming rules and their conjunction, the joint envelopes, and the
+with their arming rules and their conjunction, the joint envelopes, the
+independence of the completion check from both loop rates, and the
 inference-client command line including the quoting of `task_description`.
 
 Not proven, and not to be trusted until it is: every number in `params/` (all the

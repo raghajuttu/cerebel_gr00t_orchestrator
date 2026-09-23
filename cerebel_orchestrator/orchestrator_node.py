@@ -62,7 +62,11 @@ class OrchestratorNode(Node):
 
         self.declare_parameter("mission_file", "")
         self.declare_parameter("auto_start", False)
-        self.declare_parameter("tick_rate_hz", 10.0)
+        # Two loops, two rates. control_rate_hz sustains motion (the park ramp)
+        # and the base-enable heartbeat; supervisor_rate_hz decides when a step
+        # is done and switches to the next. See docs/ARCHITECTURE.md.
+        self.declare_parameter("control_rate_hz", 30.0)
+        self.declare_parameter("supervisor_rate_hz", 10.0)
         self.declare_parameter("shutdown_when_done", True)
         # The two halves of a rehearsal, separately: mock_policy starts no
         # inference client, mock_nav sends no Nav2 goal. The desk test mocks the
@@ -86,7 +90,7 @@ class OrchestratorNode(Node):
         # Phase termination -- measure these off a real run before trusting them
         self.declare_parameter("grasp_close_m", 0.010)
         self.declare_parameter("grasp_open_m", 0.030)
-        self.declare_parameter("motion_eps", 0.004)
+        self.declare_parameter("motion_eps", 0.05)  # rad/s, a speed
         self.declare_parameter("settle_grace_s", 3.0)
         self.declare_parameter("stale_state_s", 1.0)
 
@@ -122,6 +126,9 @@ class OrchestratorNode(Node):
             motion_eps=float(get("motion_eps").value),
             settle_grace_s=float(get("settle_grace_s").value),
             stale_state_s=float(get("stale_state_s").value),
+            # A phase that has just started gets the client's warm-up time
+            # before a gap in /joint_states counts against it.
+            stale_grace_s=self.policy_startup_grace_s,
         )
         self.monitor_config.validate()
 
@@ -182,7 +189,12 @@ class OrchestratorNode(Node):
         if bool(get("auto_start").value):
             self._begin_mission("auto_start")
 
-        self.create_timer(1.0 / max(float(get("tick_rate_hz").value), 1.0), self._tick)
+        self.create_timer(
+            1.0 / max(float(get("control_rate_hz").value), 1.0), self._execution_tick
+        )
+        self.create_timer(
+            1.0 / max(float(get("supervisor_rate_hz").value), 1.0), self._supervisor_tick
+        )
 
     # -- startup -------------------------------------------------------------
 
@@ -275,6 +287,13 @@ class OrchestratorNode(Node):
         if not self._state_seen:
             self._state_seen = True
             self.get_logger().info("/joint_states: all 16 canonical joints present")
+        # The completion check is fed here, at the rate the robot publishes,
+        # rather than sampled by the supervisor loop. That is what makes
+        # motion_eps a joint speed instead of "how far a joint moved between two
+        # of the supervisor's ticks", which would change meaning whenever either
+        # rate changed.
+        if self._monitor is not None:
+            self._monitor.observe(self._now(), ordered)
 
     def _on_estop(self, msg: Bool) -> None:
         asserted = bool(msg.data)
@@ -290,10 +309,39 @@ class OrchestratorNode(Node):
             self._estop = False
             self.runner.resume()
 
-    # -- the tick ------------------------------------------------------------
+    # -- loop 1: execution ---------------------------------------------------
 
-    def _tick(self) -> None:
+    def _execution_tick(self) -> None:
+        """Sustain whatever is currently running. Fast, and decides nothing.
+
+        Most steps need nothing here, because the thing doing the work has its
+        own loop: Nav2 runs its controller at 20 Hz and the inference client its
+        control loop at 30 Hz. This loop exists for the two things the
+        orchestrator itself has to keep doing at a steady rate -- publishing the
+        base-enable heartbeat, and stepping a park ramp.
+        """
         self._publish_gate()
+        if (
+            self._current is not None
+            and self._current.kind == "park_arms"
+            and not self.runner.held
+            and not self._estop
+        ):
+            self.parker.step()
+
+    # -- loop 2: supervision -------------------------------------------------
+
+    def _supervisor_tick(self) -> None:
+        """Ask whether the current step is done, and switch if it is.
+
+        Nothing in here commands an actuator. It starts and stops steps, and the
+        starting and stopping is where every actuator change happens -- which is
+        why this loop and the execution loop can run at different rates without
+        coordinating: they touch different things.
+
+        Both run on the same single-threaded executor, so they never interleave
+        and nothing here needs a lock. That is deliberate. Two rates, one thread.
+        """
         self._publish_status()
 
         if self.runner.terminal:
@@ -309,7 +357,7 @@ class OrchestratorNode(Node):
             self._start_action(action)
             return
 
-        outcome = self._poll_action(action)
+        outcome = self._check_action(action)
         if outcome is None:
             return
         ok, reason = outcome
@@ -375,7 +423,8 @@ class OrchestratorNode(Node):
 
         # check_arms and wait: nothing to start.
 
-    def _poll_action(self, action: Action) -> Optional[Tuple[bool, str]]:
+    def _check_action(self, action: Action) -> Optional[Tuple[bool, str]]:
+        """Is this step finished? None means carry on. Commands nothing."""
         elapsed = self._now() - self._phase_started
 
         if action.kind == "navigate":
@@ -388,28 +437,24 @@ class OrchestratorNode(Node):
             if died is not None:
                 return died
             assert self._monitor is not None
-            positions = self._positions if self._state_seen else None
-            # The client needs a moment to connect to the policy server before
-            # any arm motion is possible; the monitor's staleness check would
-            # otherwise fire on the startup gap.
-            if elapsed < self.policy_startup_grace_s and positions is None:
-                return None
-            verdict = self._monitor.update(self._now(), positions)
+            # The monitor was fed by the joint-state subscription as the samples
+            # arrived; this only asks it for an answer.
+            verdict = self._monitor.verdict(self._now())
             return (verdict.ok, verdict.reason) if verdict.done else None
 
         if action.kind == "park_arms":
             if elapsed > self.park_timeout_s:
                 return (False, f"park timed out after {self.park_timeout_s:.0f}s")
-            return self.parker.poll()
+            return self.parker.outcome()
 
         if action.kind == "check_arms":
-            return self._poll_check_arms(action, elapsed)
+            return self._check_arms(action, elapsed)
 
         if elapsed >= float(action.seconds or 0.0):
             return (True, f"waited {elapsed:.1f}s")
         return None
 
-    def _poll_check_arms(self, action: Action, elapsed: float) -> Optional[Tuple[bool, str]]:
+    def _check_arms(self, action: Action, elapsed: float) -> Optional[Tuple[bool, str]]:
         """Wait for the arms to be inside the envelope; fail if they never are.
 
         This is polled rather than sampled once because a policy phase can end

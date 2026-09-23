@@ -79,10 +79,18 @@ and expect to pay for it in grasp success.
 
 ## Motion threshold — `motion_eps`
 
-**Placeholder: 0.004 rad per tick.** Only used by `settled`. Measure it as the
-per-tick joint noise of a stationary arm: take a log of the robot holding still
-and look at the largest per-sample difference on any joint. Set it above that
-noise floor and well below the smallest motion you would call "moving".
+**Placeholder: 0.05 rad/s.** It is a joint **speed**, not a per-tick delta: the
+monitor divides by the interval between `/joint_states` stamps, so the number
+means the same thing at any loop rate and can be carried between runs and robots.
+
+Measure it as the apparent joint speed of a stationary arm. Take a log of the
+robot holding still and, for each consecutive pair of samples, compute
+`max|Δq| / Δt` across the 14 arm joints — that is the noise floor. Set
+`motion_eps` above it and well below the slowest motion you would still call
+"moving".
+
+Only `settled` uses it. The two finger joints are excluded: they are in metres,
+and a gripper still closing is not an arm still moving.
 
 ## Timeouts
 

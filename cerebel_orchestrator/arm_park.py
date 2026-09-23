@@ -198,30 +198,41 @@ class ArmParker:
         )
         return None
 
-    def poll(self) -> Optional[Tuple[bool, str]]:
-        """None while ramping; (ok, reason) when the park is over."""
+    def step(self) -> None:
+        """Publish the next point on the ramp. Call from the execution loop.
+
+        This is the half that makes the arms move, and it is separate from
+        ``outcome`` so the ramp can be published at a rate that suits a servo
+        while the decision to move on is taken at whatever rate the supervisor
+        runs. Publishing at the supervisor's rate would make the ramp's
+        smoothness a side effect of how often the mission logic is checked.
+        """
+        if self._target is None or self._start_time is None:
+            return
+        target = self._target.as_canonical()
+        command = [
+            origin + (goal - origin) * self._fraction()
+            for origin, goal in zip(self._origin or target, target)
+        ]
+        self._publish_arms(command)
+        if self._fraction() >= 1.0 and not self._gripper_sent:
+            self._publish_grippers(self._target)
+            self._gripper_sent = True
+
+    def outcome(self) -> Optional[Tuple[bool, str]]:
+        """None while ramping; (ok, reason) when the park is over.
+
+        Decides only -- it publishes nothing, so calling it more or less often
+        changes when the mission moves on and nothing about the motion itself.
+        """
         if self._target is None:
             return (True, "park skipped (enable_park is false)")
         if self._start_time is None:
             return (False, "park polled before it was started")
-
-        fraction = 1.0 if self._duration <= 0 else min(
-            1.0, (self._now() - self._start_time) / self._duration
-        )
-        target = self._target.as_canonical()
-        command = [
-            origin + (goal - origin) * fraction
-            for origin, goal in zip(self._origin or target, target)
-        ]
-        self._publish_arms(command)
-
-        if fraction >= 1.0 and not self._gripper_sent:
-            self._publish_grippers(self._target)
-            self._gripper_sent = True
-
-        if fraction < 1.0:
+        if self._fraction() < 1.0:
             return None
 
+        target = self._target.as_canonical()
         error = self._pose_error(target)
         if error is None:
             return (True, "ramp complete (no joint_states to verify against)")
@@ -236,6 +247,18 @@ class ArmParker:
                 f"{error:.4f} rad > {self.tolerance}",
             )
         return None
+
+    def poll(self) -> Optional[Tuple[bool, str]]:
+        """``step`` then ``outcome``, for a caller with only one loop."""
+        self.step()
+        return self.outcome()
+
+    def _fraction(self) -> float:
+        if self._start_time is None:
+            return 0.0
+        if self._duration <= 0:
+            return 1.0
+        return min(1.0, (self._now() - self._start_time) / self._duration)
 
     def cancel(self) -> None:
         """Freeze the arms where they are by re-commanding the measured pose."""

@@ -7,8 +7,16 @@ orchestrator:
   ros__parameters:
     # Set on the command line, not here: mission_file.
     auto_start: false            # true starts on launch; false waits for ~/start
-    tick_rate_hz: 10.0
     shutdown_when_done: true
+
+    # -- the two loops ------------------------------------------------------
+    # Execution: sustains motion (the park ramp) and publishes the base-enable
+    # heartbeat. It decides nothing, so it can afford to be fast.
+    control_rate_hz: 30.0
+    # Supervision: asks whether the current step is done, and switches to the
+    # next. It commands no actuator. Raising it makes the robot switch steps
+    # sooner; it does not make any motion smoother.
+    supervisor_rate_hz: 10.0
     # Rehearsal switches, independently settable. The launch file's dry_run:=true
     # sets both. mock_policy starts no inference client; mock_nav sends no Nav2
     # goal and a navigate step simply succeeds.
@@ -36,8 +44,10 @@ orchestrator:
     # closed-on-the-object, released. Put the thresholds either side of the gap.
     grasp_close_m: 0.010
     grasp_open_m: 0.030
-    # Per-tick joint motion below this counts as "not moving" for `settled`.
-    motion_eps: 0.004
+    # Joint SPEED in rad/s below which an arm counts as "not moving" for
+    # `settled`. A speed, not a per-tick delta -- it is computed from the
+    # /joint_states timestamps, so it means the same thing at any loop rate.
+    motion_eps: 0.05
     settle_grace_s: 3.0
     # A policy phase fails if /joint_states goes quiet for this long.
     stale_state_s: 1.0

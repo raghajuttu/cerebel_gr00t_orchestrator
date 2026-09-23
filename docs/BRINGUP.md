@@ -7,7 +7,7 @@ how a bad station pose gets blamed on the policy.
 ## 0. Build and validate, anywhere
 
 ```bash
-python -m pytest tests -q                        # 71 tests, no ROS needed
+python -m pytest tests -q                        # 87 tests, no ROS needed
 python -m cerebel_orchestrator.mission missions/*.yaml
 ```
 

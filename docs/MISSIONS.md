@@ -90,7 +90,7 @@ registered mid-reach, with the arm still swinging, does not end the phase.
 | `timeout_s` | **mandatory**. The only condition that always fires |
 | `grasp` | `closed` or `open`, on `side`'s finger joint |
 | `side` | `left` or `right` |
-| `settled` | no *arm* joint moves more than `motion_eps`. The fingers are excluded -- a gripper still closing is not an arm still moving, and they are not even in the same units |
+| `settled` | no *arm* joint moves faster than `motion_eps` rad/s. The fingers are excluded — a gripper still closing is not an arm still moving, and they are not even in the same units |
 | `operator` | no automatic end; the phase runs until `~/advance` or `~/skip`. Cannot be combined with `grasp` or `settled` |
 | `hold_s` | how long each condition must hold before it counts (default 0.5 s) |
 
@@ -117,7 +117,9 @@ they look for is usually true at the moment the phase starts.
   done while standing still.
 * **`settled` arms on seeing motion**, and never before `settle_grace_s` (3 s).
   Otherwise every phase would "settle" in the moment before its first action chunk
-  arrives.
+  arrives. Motion is a joint *speed*, read from the `/joint_states` timestamps, so
+  the threshold means the same thing whatever rate the loops run at — see
+  [ARCHITECTURE.md](ARCHITECTURE.md#the-two-loops).
 
 A phase also fails if `/joint_states` goes quiet for `stale_state_s` — the policy
 would still be driving the arms off an observation nobody is checking.

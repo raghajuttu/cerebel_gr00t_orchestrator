@@ -72,13 +72,70 @@ Consequences worth knowing:
   `task_description` that loses its spaces is a phase that silently runs the wrong
   policy.
 
+## The two loops
+
+The node runs two loops at two rates, plus the sensor callback that feeds them:
+
+| Loop | Rate | Job | Touches |
+|---|---|---|---|
+| **execution** — `_execution_tick` | `control_rate_hz`, 30 Hz | sustain what is currently running | publishes the park ramp and the `base_enable` heartbeat |
+| **supervision** — `_supervisor_tick` | `supervisor_rate_hz`, 10 Hz | is this step done? if so, switch | starts and stops steps; commands no actuator directly |
+| **observation** — `_on_joint_states` | whatever the robot publishes, ~30 Hz | fold each sample into the completion check | nothing; it only accumulates |
+
+The split is along *what each one is allowed to do*, and that is what lets the
+rates be independent:
+
+* The execution loop decides nothing. Raising it makes the park ramp smoother and
+  the heartbeat more robust, and changes no behaviour.
+* The supervision loop commands nothing. Raising it makes the robot switch steps
+  sooner after a condition is met, and makes no motion smoother.
+
+The execution loop is mostly idle, because for two of the four step kinds the
+thing doing the work has its own loop: Nav2 runs its controller at 20 Hz and the
+inference client its control loop at 30 Hz. The orchestrator starts them and gets
+out of the way. What is left for this loop is the park ramp — the one motion the
+orchestrator produces itself — and the heartbeat, which wants a steady fast rate
+so the base's fail-closed timeout can be short.
+
+**Both loops run on the same single-threaded executor.** They never interleave,
+so no state is shared across threads and there are no locks anywhere in this
+package. Two rates, one thread: the separation is in responsibilities, not in
+concurrency, and adding a `MultiThreadedExecutor` here would buy nothing and cost
+every race that currently cannot happen.
+
+### Why observation is a third thing
+
+Completion is judged from `/joint_states`, and those samples are folded in by the
+subscription rather than sampled by either loop:
+
+```python
+def _on_joint_states(self, msg):          # ~30 Hz, the robot's rate
+    self._monitor.observe(now, ordered)   # accumulate; decide nothing
+
+def _supervisor_tick(self):               # 10 Hz, our rate
+    verdict = self._monitor.verdict(now)  # decide; observe nothing
+```
+
+This is not tidiness. `PhaseMonitor` judges "the arm has stopped" from a joint
+**speed**, and a speed needs the interval between two samples. If the supervisor
+sampled the latest pose on its own tick instead, the threshold would really mean
+"how far a joint moved between two of my ticks" — a number whose meaning changes
+whenever either rate changes, and which cannot be transferred from one robot or
+one run to another. Tuned at 10 Hz, the same value silently means something three
+times stricter at 30 Hz. `tests/test_two_loops.py` pins the independence across
+sensor rates of 10/30/100 Hz and supervisor rates of 5/10/50 Hz.
+
+The same split exists in `ArmParker` (`step` publishes, `outcome` decides) for the
+same reason: the ramp's smoothness should not be a side effect of how often the
+mission logic is checked.
+
 ## Why nothing blocks in the node
 
-The whole mission advances inside one timer callback at 10 Hz on a single-threaded
-executor. Every handler is poll-shaped: `send` then `poll`, never `wait`. That is
-what keeps the e-stop subscription and the six service calls live while a 90-second
-policy phase is running. `PolicyRunner.stop` is the one place that blocks, and it
-blocks for at most the two grace periods.
+Every handler is poll-shaped: `send` then `poll`, never `wait`. That is what keeps
+the e-stop subscription and the six service calls live while a 90-second policy
+phase is running, and it is why the supervision loop can be a plain timer rather
+than a thread per step. `PolicyRunner.stop` is the one place that blocks, and it
+blocks for at most the two signal grace periods.
 
 ## The pure core
 

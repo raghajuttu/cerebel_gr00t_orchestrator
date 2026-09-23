@@ -7,6 +7,28 @@ adapter, the parker, the phase monitor — does not ship without an entry here.
 The format follows `adibot_gr00t_client/docs/VALIDATION.md`: what ran, on what,
 with which parameters, and what was observed.
 
+## v0.3.0 — 2026-09-23
+
+**Proven on hardware: nothing.** Split into an execution loop and a supervision
+loop; see the changelog.
+
+Proven in unit tests (87 total, `python -m pytest tests -q`, no ROS required) —
+new in this release, `tests/test_two_loops.py`:
+
+| Area | What the tests cover |
+|---|---|
+| rate independence | `settled` fires at the same time (±one loop period) across every combination of 10/30/100 Hz sensor rates and 5/10/50 Hz supervisor rates |
+| the bug this removes | a continuously moving arm is never called settled at any sampling rate — under the old per-tick-delta semantics a fast enough sample rate made each delta small enough to read as stationary |
+| the split API | observing without ever deciding accumulates correctly; deciding without ever observing falls through to the timeout |
+| clock defences | duplicate and out-of-order `/joint_states` stamps do not divide by zero or corrupt the speed |
+| `stale_grace_s` | a gap in `/joint_states` inside the startup grace is survived; the same gap after it fails the phase |
+
+**Not proven:** that 30 Hz is the right execution rate for the park ramp on real
+controllers, and that 10 Hz supervision is soon enough to switch steps without a
+visible pause between a finished pick and the base starting to move. Both are
+one-line parameter changes and both should be looked at during step 8 of
+[BRINGUP.md](BRINGUP.md).
+
 ## v0.2.0 — 2026-09-23
 
 **Proven on hardware: nothing.** Reshaped around pick-and-carry; see the

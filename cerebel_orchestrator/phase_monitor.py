@@ -14,9 +14,10 @@ The conditions, all optional except the first, **combined with AND**:
 ``grasp: closed|open`` on ``side``
     the finger joint crosses its threshold and stays there for ``hold_s``.
 ``settled``
-    no *arm* joint moves more than ``motion_eps`` for ``hold_s``. The fingers are
-    excluded deliberately -- a gripper still closing is not an arm still moving,
-    and the two are not even in the same units (radians against metres).
+    no *arm* joint moves faster than ``motion_eps`` rad/s for ``hold_s``. The
+    fingers are excluded deliberately -- a gripper still closing is not an arm
+    still moving, and the two are not even in the same units (radians against
+    metres).
 
 ``grasp`` and ``settled`` together are the pick-and-carry check: the object is
 held *and* the arm has come to rest in its carry pose. That conjunction is what
@@ -38,6 +39,16 @@ two:
 If a condition never arms, the phase runs to its timeout. That is the safe
 direction: the robot keeps working on the task rather than being declared done
 while it stands still.
+
+**Observing and deciding are separate calls.** ``observe`` folds in one
+``/joint_states`` sample and is meant to be called from the subscription, at
+whatever rate the robot publishes; ``verdict`` answers "is this phase over?" and
+is meant to be called from the loop that switches steps, at whatever rate that
+runs. Keeping them apart is what lets ``motion_eps`` be a **speed** rather than a
+per-tick delta -- a threshold measured in "how far a joint moved between two of
+my ticks" silently changes meaning the moment either rate changes, which is the
+sort of tuning that appears to work and then does not. ``update`` does both in one
+call, for tests and for callers with only one loop.
 """
 
 from __future__ import annotations
@@ -70,9 +81,14 @@ class MonitorConfig:
 
     grasp_close_m: float = 0.010
     grasp_open_m: float = 0.030
-    motion_eps: float = 0.004
+    # A joint SPEED, rad/s -- not a per-tick delta. See the module docstring.
+    motion_eps: float = 0.05
     settle_grace_s: float = 3.0
     stale_state_s: float = 1.0
+    # The staleness check is suppressed for this long after a phase starts. A
+    # policy server warming up can starve the joint-state subscription of a few
+    # samples, and that is not a reason to fail a phase that has barely begun.
+    stale_grace_s: float = 0.0
 
     def validate(self) -> None:
         if not self.grasp_close_m < self.grasp_open_m:
@@ -84,6 +100,8 @@ class MonitorConfig:
             raise ValueError("motion_eps must be positive")
         if self.settle_grace_s < 0 or self.stale_state_s <= 0:
             raise ValueError("settle_grace_s must be >= 0 and stale_state_s > 0")
+        if self.stale_grace_s < 0:
+            raise ValueError("stale_grace_s must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -132,12 +150,18 @@ class PhaseMonitor:
 
     # -- the tick -----------------------------------------------------------
 
-    def update(self, now: float, positions: Optional[Sequence[float]]) -> Verdict:
-        """Advance the monitor by one observation.
+    def observe(self, now: float, positions: Sequence[float]) -> None:
+        """Fold in one ``/joint_states`` sample. Call from the subscription.
 
-        ``positions`` is the 16-DOF canonical joint vector, or None when no
-        fresh ``/joint_states`` was available this tick.
+        Cheap by design: it updates the motion and grasp state and decides
+        nothing, so it can run as often as the robot publishes.
         """
+        if len(positions) != 16:
+            raise ValueError(f"expected 16 canonical joints, got {len(positions)}")
+        self._observe(now, [float(value) for value in positions])
+
+    def verdict(self, now: float) -> Verdict:
+        """Is this phase over? Call from the loop that switches steps."""
         elapsed = now - self.start_time
 
         # The operator overrides everything, in any phase.
@@ -146,14 +170,9 @@ class PhaseMonitor:
         if self._operator_advanced:
             return Verdict(True, True, f"operator advanced after {elapsed:.1f}s")
 
-        if positions is not None:
-            if len(positions) != 16:
-                raise ValueError(f"expected 16 canonical joints, got {len(positions)}")
-            self._observe(now, [float(value) for value in positions])
-
         # Losing proprioception mid-phase is a fault, not a slow tick: the
         # policy is still driving the arms off an observation nobody is checking.
-        if self._last_state_time is not None:
+        if self._last_state_time is not None and elapsed >= self.config.stale_grace_s:
             age = now - self._last_state_time
             if age > self.config.stale_state_s:
                 return Verdict(True, False, f"joint_states stale for {age:.2f}s")
@@ -187,21 +206,33 @@ class PhaseMonitor:
 
         return Verdict.running()
 
+    def update(self, now: float, positions: Optional[Sequence[float]]) -> Verdict:
+        """``observe`` then ``verdict``, for a caller with only one loop."""
+        if positions is not None:
+            self.observe(now, positions)
+        return self.verdict(now)
+
     # -- internals ----------------------------------------------------------
 
     def _observe(self, now: float, positions: List[float]) -> None:
-        if self._last_positions is not None:
-            moved = max(
-                abs(positions[index] - self._last_positions[index])
-                for index in ARM_INDICES
-            )
-            if moved > self.config.motion_eps:
-                self._motion_seen = True
-                self._still_since = None
-            elif self._still_since is None:
-                self._still_since = now
+        previous, last_time = self._last_positions, self._last_state_time
         self._last_positions = positions
         self._last_state_time = now
+        if previous is None or last_time is None:
+            return
+        dt = now - last_time
+        if dt <= 0:
+            # A duplicate or out-of-order stamp. The pose is still the freshest
+            # thing available, but no speed can be read from it.
+            return
+        speed = (
+            max(abs(positions[index] - previous[index]) for index in ARM_INDICES) / dt
+        )
+        if speed > self.config.motion_eps:
+            self._motion_seen = True
+            self._still_since = None
+        elif self._still_since is None:
+            self._still_since = now
 
     def _finger(self) -> Optional[float]:
         if self._last_positions is None or self.until.side is None:
