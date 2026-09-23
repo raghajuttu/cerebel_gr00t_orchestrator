@@ -1,8 +1,16 @@
-# Autonomous pick-and-place across two stations, one lateral base move apart.
+# Autonomous pick-and-place across two stations, one base move apart.
 #
-# The shape of the task: park, drive left to the pick station, run the pick
-# policy until the gripper closes on the object, park, drive right to the place
-# station, run the place policy until the gripper opens, park.
+# The shape of the task:
+#
+#   arms hanging down  ->  drive to the pick station  ->  the pick policy picks
+#   the object and comes to rest holding it in its carry pose  ->  verify that
+#   pose  ->  drive to the place station WITH THE OBJECT IN HAND  ->  the place
+#   policy puts it down  ->  tuck both arms back to the normal base pose.
+#
+# **There is deliberately no park between the pick and the drive.** The policy's
+# own final pose is the travel pose -- ramping the arms to a parked pose there
+# would drop the object. That is what `ends_parked: true` declares, and what the
+# `check_arms` step immediately after it verifies.
 #
 # Numbers to replace before running:
 #   * station x/y/yaw       -- metres and radians in the `frame_id` frame, which
@@ -12,21 +20,23 @@
 #   * server_host/port      -- the GPU box, or 127.0.0.1 through an SSH forward
 #   * timeout_s             -- generous enough for a slow attempt, short enough
 #                              that a failed one does not sit there for minutes
+#   * the `carry` envelope in params/arm_envelopes.yaml -- placeholders until
+#                              measured from a few real picks
 
 name: two_station_pick_place
 frame_id: odom
 
 stations:
-  # `home` is the pose the base starts from: with odometry-only localisation,
-  # (0, 0, 0) is by definition where the wheels were when the driver came up.
+  # With odometry-only localisation, (0, 0, 0) is by definition where the wheels
+  # were when the chassis driver came up.
   home:  {x: 0.0, y:  0.0, yaw: 0.0}
   pick:  {x: 0.0, y:  0.45, yaw: 0.0}
   place: {x: 0.0, y: -0.45, yaw: 0.0}
 
 policies:
   # Two prompts, one served checkpoint -- the common case with a single
-  # fine-tune. If you later train a separate place policy, give it its own port
-  # and run a second policy server on the GPU box.
+  # fine-tune. Give the place policy its own port once it is a separate
+  # checkpoint, and run a second policy server on the GPU box.
   pick_cube:
     task_description: "pick up the green cube and place it in the box"
     server_host: 127.0.0.1
@@ -36,9 +46,9 @@ policies:
       execution_horizon: 16
       prefetch_enable: true
       rtc_enable: false
-      # Limits off matches the validated configuration in
-      # adibot_gr00t_client docs/VALIDATION.md; turn them on with a limits_file
-      # extracted from the dataset once the task is reliable.
+      # Limits off matches the validated configuration in adibot_gr00t_client
+      # docs/VALIDATION.md; turn them on with a limits_file extracted from the
+      # dataset once the task is reliable.
       enable_limits: false
       enable_right_arm: false
       enable_right_gripper: false
@@ -57,40 +67,56 @@ policies:
       enable_right_gripper: false
 
 steps:
-  # Park first: the mission cannot know what the arms were doing before it
-  # started, and step 1 moves the base.
-  - {step: park_arms, profile: travel}
+  # Start from the normal base pose, arms hanging down. The mission cannot know
+  # what the arms were doing before it began, and step 1 moves the base.
+  - {step: park_arms, profile: home}
 
   - {step: navigate, station: pick, on_fail: retry, retries: 2}
 
   # Put the arms where the training episodes began, so the policy's first
-  # observation is in distribution.
+  # observation is in distribution -- and so the gripper is open, which is what
+  # arms the `grasp: closed` condition below. Drop this step if `home` already
+  # is the pose the episodes start from.
   - {step: park_arms, profile: ready}
 
-  # The pick ends when the left gripper closes and stays closed for half a
-  # second. If it never does, the phase fails at 90 s and says what the finger
-  # was doing -- which is the information you need to fix either the policy or
-  # the thresholds.
+  # The pick ends when the gripper is closed on the object AND the arm has
+  # stopped moving -- i.e. the policy has finished and is holding its carry
+  # pose. Both conditions, not the first one to fire: a grasp registered
+  # mid-reach would send the base off while the arm was still swinging.
+  #
+  # on_fail is `abort`, not `retry`, on purpose. A retry re-runs only this step,
+  # starting from wherever the failed attempt ended -- and if that left the
+  # gripper closed, the `grasp: closed` condition can never arm and the retry is
+  # guaranteed to time out. Retry a failed pick by re-running the mission.
   - step: run_policy
     policy: pick_cube
-    until: {timeout_s: 90.0, grasp: closed, side: left, hold_s: 0.5}
-    on_fail: retry
-    retries: 1
+    until: {timeout_s: 90.0, grasp: closed, side: left, settled: true, hold_s: 0.5}
+    ends_parked: true
+    on_fail: abort
 
-  - {step: park_arms, profile: travel}
+  # Verify the claim `ends_parked` makes. If the policy finished somewhere other
+  # than its carry pose -- or dropped the object -- the mission stops here,
+  # before the wheels turn.
+  - {step: check_arms, envelope: carry, seconds: 5.0}
 
   - {step: navigate, station: place, on_fail: retry, retries: 2}
 
-  - {step: park_arms, profile: ready}
-
-  # The place ends when the gripper opens again.
+  # The place ends when the gripper opens again and the arm settles.
   - step: run_policy
     policy: place_cube
-    until: {timeout_s: 90.0, grasp: open, side: left, hold_s: 0.5}
+    until: {timeout_s: 90.0, grasp: open, side: left, settled: true, hold_s: 0.5}
     on_fail: abort
 
-  - {step: park_arms, profile: travel}
-  - {step: navigate, station: home, on_fail: continue}
-  - {step: park_arms, profile: rest}
+  # Tuck both arms back to the normal base pose, hands hanging down.
+  #
+  # If the place policy is trained to return to that pose by itself, delete this
+  # step and mark the policy `ends_parked: true` instead -- the mission then ends
+  # with the arms wherever the policy put them, and the check below is what
+  # confirms that is where you wanted them.
+  - {step: park_arms, profile: home}
+  - {step: check_arms, envelope: home, seconds: 5.0}
+
+  # To drive back to the start afterwards, add:
+  #   - {step: navigate, station: home, on_fail: continue}
 
 repeat: 1

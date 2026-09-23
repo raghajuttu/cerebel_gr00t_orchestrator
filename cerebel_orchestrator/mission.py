@@ -27,7 +27,7 @@ import yaml
 MAX_TIMEOUT_S = 600.0
 
 ON_FAIL_CHOICES = ("abort", "retry", "continue")
-STEP_KINDS = ("navigate", "run_policy", "park_arms", "wait")
+STEP_KINDS = ("navigate", "run_policy", "park_arms", "check_arms", "wait")
 GRASP_STATES = ("closed", "open")
 SIDES = ("left", "right")
 
@@ -155,19 +155,28 @@ class Until:
     """When a policy phase is finished.
 
     ``timeout_s`` is mandatory and is the *only* condition that always fires.
-    The others are optimistic: they end the phase early once the robot has
-    visibly done the thing.
+
+    **Conditions combine with AND.** A phase with both ``grasp`` and ``settled``
+    ends when the gripper is closed on the object *and* the arm has stopped
+    moving -- which is exactly the question "has the policy finished the pick and
+    come to rest in its carry pose", and it is the check that has to pass before
+    the base drives off with the object in hand.
 
     grasp
         ``closed`` or ``open`` on ``side``'s finger joint, held for ``hold_s``.
         The thresholds are not here -- they are a property of the gripper, so
         they live in the orchestrator params file.
     settled
-        every joint below the motion threshold for ``hold_s``; the policy has
-        stopped moving the arm.
+        no *arm* joint moves more than the motion threshold for ``hold_s``. The
+        fingers are excluded: a gripper still closing is not an arm still moving.
     operator
-        wait for a call to the orchestrator's ``advance`` service. Use this
-        while bringing a new task up.
+        no automatic end at all -- the phase runs until the ``advance`` or
+        ``skip`` service is called. Cannot be combined with ``grasp`` or
+        ``settled``, because "wait for a human" and "watch for a condition" are
+        different intentions and a mixture of the two reads as neither.
+
+    ``advance`` and ``skip`` work in *any* policy phase as an operator override;
+    ``operator: true`` declares that they are the only way this one ends.
     """
 
     timeout_s: float
@@ -202,12 +211,19 @@ class Until:
             where,
             "hold_s must be non-negative and shorter than timeout_s",
         )
+        operator = bool(raw.get("operator", False))
+        _require(
+            not (operator and (grasp is not None or bool(raw.get("settled", False)))),
+            where,
+            "operator cannot be combined with grasp or settled -- operator means "
+            "this phase has no automatic end",
+        )
         return Until(
             timeout_s=timeout,
             grasp=grasp,
             side=side,
             settled=bool(raw.get("settled", False)),
-            operator=bool(raw.get("operator", False)),
+            operator=operator,
             hold_s=hold,
         )
 
@@ -230,18 +246,26 @@ class Step:
     station: Optional[str] = None
     policy: Optional[str] = None
     profile: Optional[str] = None
+    envelope: Optional[str] = None
     seconds: Optional[float] = None
     until: Optional[Until] = None
     on_fail: str = "abort"
     retries: int = 0
+    # run_policy only: this policy is trained to finish in a pose the base can
+    # drive with -- holding the object, arms clear of the chassis. It is a claim
+    # about the checkpoint, so the lint believes it and check_arms verifies it.
+    ends_parked: bool = False
 
     def describe(self) -> str:
         if self.kind == "navigate":
             return f"navigate -> {self.station}"
         if self.kind == "run_policy":
-            return f"run_policy {self.policy}"
+            tail = " (ends parked)" if self.ends_parked else ""
+            return f"run_policy {self.policy}{tail}"
         if self.kind == "park_arms":
             return f"park_arms [{self.profile}]"
+        if self.kind == "check_arms":
+            return f"check_arms [{self.envelope}]"
         return f"wait {self.seconds}s"
 
     @staticmethod
@@ -252,8 +276,9 @@ class Step:
         _require(kind in STEP_KINDS, where, f"step must be one of {STEP_KINDS}, got {kind!r}")
         allowed = {"step", "on_fail", "retries"} | {
             "navigate": {"station"},
-            "run_policy": {"policy", "until"},
+            "run_policy": {"policy", "until", "ends_parked"},
             "park_arms": {"profile"},
+            "check_arms": {"envelope", "seconds"},
             "wait": {"seconds"},
         }[kind]
         unknown = set(raw) - allowed
@@ -272,7 +297,8 @@ class Step:
         if on_fail == "retry":
             _require(retries > 0, where, "on_fail: retry needs retries > 0")
 
-        station = policy = profile = seconds = until = None
+        station = policy = profile = envelope = seconds = until = None
+        ends_parked = False
         if kind == "navigate":
             station = raw.get("station")
             _require(isinstance(station, str) and station, where, "navigate needs station")
@@ -280,8 +306,20 @@ class Step:
             policy = raw.get("policy")
             _require(isinstance(policy, str) and policy, where, "run_policy needs policy")
             until = Until.parse(raw.get("until"), f"{where}.until")
+            ends_parked = bool(raw.get("ends_parked", False))
+            if ends_parked and not (until.settled or until.operator):
+                raise MissionError(
+                    f"{where}: ends_parked claims the policy finishes in a "
+                    "drive-safe pose, but until has no `settled` -- without it "
+                    "the phase can end mid-motion and the claim means nothing"
+                )
         elif kind == "park_arms":
             profile = str(raw.get("profile", "travel"))
+        elif kind == "check_arms":
+            envelope = str(raw.get("envelope", ""))
+            _require(bool(envelope), where, "check_arms needs an envelope name")
+            seconds = _as_float(raw.get("seconds", 5.0), where, "seconds")
+            _require(0 < seconds <= MAX_TIMEOUT_S, where, "seconds out of range")
         else:
             seconds = _as_float(raw.get("seconds", 1.0), where, "seconds")
             _require(0 < seconds <= MAX_TIMEOUT_S, where, "seconds out of range")
@@ -292,10 +330,12 @@ class Step:
             station=station,
             policy=policy,
             profile=profile,
+            envelope=envelope,
             seconds=seconds,
             until=until,
             on_fail=on_fail,
             retries=retries,
+            ends_parked=ends_parked,
         )
 
 
@@ -384,28 +424,40 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
 
     The one that matters: driving the base with the arms wherever a policy left
     them. The arms hold their last commanded pose after the inference client
-    exits, so a navigate step that is not preceded by ``park_arms`` moves the
-    robot with two 7-DOF arms sticking out at whatever the last action chunk
-    asked for.
+    exits, so a navigate step moves the robot with two 7-DOF arms sticking out at
+    whatever the last action chunk asked for.
 
-    These are warnings because a short, well-understood move -- a bench test, a
-    mission whose poses are all tucked -- is a legitimate reason to skip parking,
-    and the orchestrator should not refuse to run it.
+    Three things make a navigate safe, and any of them satisfies the check:
+
+    * ``park_arms`` -- the orchestrator put the arms somewhere known;
+    * ``check_arms`` -- the arms were verified to be inside a named envelope;
+    * a ``run_policy`` marked ``ends_parked: true`` -- the policy itself finishes
+      in a drive-safe pose. This is the pick-and-carry case: the policy picks the
+      object and holds it in its carry pose, so parking in between would drop it.
+
+    These are warnings because a short, well-understood move is a legitimate
+    reason to skip all three, and the orchestrator should not refuse to run it.
     """
     warnings: List[str] = []
     steps = mission.steps
     if not any(step.kind == "navigate" for step in steps):
         return warnings
-    if not any(step.kind == "park_arms" for step in steps):
+    settles_the_arms = [
+        step
+        for step in steps
+        if step.kind in ("park_arms", "check_arms")
+        or (step.kind == "run_policy" and step.ends_parked)
+    ]
+    if not settles_the_arms:
         warnings.append(
-            "the mission navigates but never parks the arms -- the base will move "
-            "with the arms wherever the policy left them"
+            "the mission navigates but never parks, checks or declares the arms "
+            "safe -- the base will move with them wherever the policy left them"
         )
         return warnings
 
     # Walk backwards from each navigate to the last step that moved the arms.
-    # Only run_policy and park_arms do; navigate and wait leave them alone, so a
-    # park several steps back is still a park.
+    # Only run_policy and park_arms do; navigate, wait and check_arms leave them
+    # alone, so a park several steps back is still a park.
     order = list(range(len(steps)))
     if mission.repeat > 1:
         # Cycles 2+ arrive at step 0 from the last step of the previous cycle.
@@ -418,23 +470,28 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
         culprit: Optional[Step] = None
         for back in range(position - 1, -1, -1):
             previous = steps[order[back]]
-            if previous.kind == "park_arms":
+            if previous.kind in ("park_arms", "check_arms"):
                 break
             if previous.kind == "run_policy":
-                culprit = previous
+                # A policy that ends in its carry pose is the point of the
+                # pick-and-carry mission, not a mistake.
+                if not previous.ends_parked:
+                    culprit = previous
                 break
         else:
             # Ran off the front of the list without meeting either.
             if position < len(steps):
                 warnings.append(
-                    f"steps[{step.index}] navigates before any park_arms, so the "
-                    "mission assumes the arms are already parked when it starts"
+                    f"steps[{step.index}] navigates before any park_arms or "
+                    "check_arms, so the mission assumes the arms are already "
+                    "parked when it starts"
                 )
             continue
         if culprit is not None:
             warnings.append(
                 f"steps[{step.index}] ({step.describe()}) follows "
-                f"{culprit.describe()} with no park_arms in between"
+                f"{culprit.describe()} with no park_arms or check_arms in "
+                "between, and that policy is not marked ends_parked"
             )
     # The doubled list can report the same step twice; keep the first of each.
     seen: Dict[str, None] = {}

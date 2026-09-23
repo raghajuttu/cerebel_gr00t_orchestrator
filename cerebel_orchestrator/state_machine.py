@@ -38,6 +38,7 @@ class Phase(str, Enum):
 
     IDLE = "idle"
     PARK = "park"
+    CHECK = "check_arms"
     NAVIGATE = "navigate"
     POLICY = "policy"
     WAIT = "wait"
@@ -53,6 +54,7 @@ _PHASE_FOR_KIND = {
     "navigate": Phase.NAVIGATE,
     "run_policy": Phase.POLICY,
     "park_arms": Phase.PARK,
+    "check_arms": Phase.CHECK,
     "wait": Phase.WAIT,
 }
 
@@ -75,6 +77,7 @@ class Action:
     until: Optional[Until] = None
     seconds: Optional[float] = None
     profile: Optional[str] = None
+    envelope: Optional[str] = None
 
     def describe(self) -> str:
         suffix = f" (attempt {self.attempt + 1})" if self.attempt else ""
@@ -223,6 +226,7 @@ class MissionRunner:
             until=step.until,
             seconds=step.seconds,
             profile=step.profile,
+            envelope=step.envelope,
         )
 
     def _advance_phase(self) -> None:

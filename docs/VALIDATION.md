@@ -7,11 +7,34 @@ adapter, the parker, the phase monitor — does not ship without an entry here.
 The format follows `adibot_gr00t_client/docs/VALIDATION.md`: what ran, on what,
 with which parameters, and what was observed.
 
+## v0.2.0 — 2026-09-23
+
+**Proven on hardware: nothing.** Reshaped around pick-and-carry; see the
+changelog. Everything in the v0.1.0 entry below still applies, plus:
+
+Proven in unit tests (71 total, `python -m pytest tests -q`, no ROS required):
+
+| Area | What the tests cover |
+|---|---|
+| AND semantics | a grasp mid-reach does not end the phase; settling without the object does not either; both together do, and the reason names both |
+| the settle check | a closing gripper is not an arm still moving |
+| `ends_parked` | it satisfies the lint, and is refused without `settled` |
+| `check_arms` | it satisfies the lint on its own; an envelope name is required |
+| envelopes | bounds, unconstrained joints, every violation reported, a dropped object caught by the finger bound, and the shipped file parsing |
+| the shipped mission | no park between the pick policy and the drive; `check_arms` in between |
+
+**Still not proven, and specific to this release:** that a GR00T policy actually
+comes to rest in a repeatable carry pose at all. The whole carry design rests on
+it, and step 7b of [BRINGUP.md](BRINGUP.md) is where it gets measured. If the
+carry pose turns out to vary too much to envelope, the fallback is a `park_arms`
+to a *holding* profile between the pick and the drive — a pose that keeps the
+gripper closed while moving the arm somewhere known.
+
 ## v0.1.0 — 2026-09-23
 
 **Proven on hardware: nothing.** This is the first cut of the package.
 
-Proven in unit tests (52, `python -m pytest tests -q`, no ROS required):
+Proven in unit tests (52 at the time, `python -m pytest tests -q`, no ROS required):
 
 | Area | What the tests cover |
 |---|---|

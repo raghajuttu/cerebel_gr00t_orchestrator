@@ -6,6 +6,7 @@ The modules split cleanly in two:
     mission.py        the mission file: stations, policies, steps
     state_machine.py  what to do next, retries, repeats, terminal states
     phase_monitor.py  when a policy phase is finished
+    envelopes.py      named joint envelopes, and the check_arms measurement
 
 *ROS* (needs rclpy on the robot computer)
     orchestrator_node.py  the driver that ties the three together
@@ -16,4 +17,4 @@ The modules split cleanly in two:
     probe_robot.py        read-only survey of what the robot actually exposes
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

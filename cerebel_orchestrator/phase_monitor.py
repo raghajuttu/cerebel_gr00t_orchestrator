@@ -5,7 +5,7 @@ observation it is given, forever. So "the pick is done" has to be read off the
 robot, and this module is where that reading lives -- pure, clock-injected, and
 unit-testable against a synthetic joint-state stream.
 
-Three conditions, all of them optional except the first:
+The conditions, all optional except the first, **combined with AND**:
 
 ``timeout_s``
     always present, always fires. When the step asked for nothing else, the
@@ -14,7 +14,14 @@ Three conditions, all of them optional except the first:
 ``grasp: closed|open`` on ``side``
     the finger joint crosses its threshold and stays there for ``hold_s``.
 ``settled``
-    no joint moves more than ``motion_eps`` for ``hold_s``.
+    no *arm* joint moves more than ``motion_eps`` for ``hold_s``. The fingers are
+    excluded deliberately -- a gripper still closing is not an arm still moving,
+    and the two are not even in the same units (radians against metres).
+
+``grasp`` and ``settled`` together are the pick-and-carry check: the object is
+held *and* the arm has come to rest in its carry pose. That conjunction is what
+has to be true before the base drives off with the object, which is why the two
+combine rather than racing.
 
 Both early conditions have to be *armed* before they can fire, because the state
 they look for is often true at the moment the phase starts: the gripper is
@@ -38,8 +45,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from .joints import GRIPPER_INDEX
+from .joints import ARM_SLICE, GRIPPER_INDEX
 from .mission import Until
+
+# Which canonical indices count as "the arms moving". The two finger joints are
+# not in this list; see the module docstring.
+ARM_INDICES = [
+    index
+    for side in ("left", "right")
+    for index in range(ARM_SLICE[side].start, ARM_SLICE[side].stop)
+]
 
 
 @dataclass(frozen=True)
@@ -125,6 +140,7 @@ class PhaseMonitor:
         """
         elapsed = now - self.start_time
 
+        # The operator overrides everything, in any phase.
         if self._operator_aborted:
             return Verdict(True, False, "operator skipped the phase")
         if self._operator_advanced:
@@ -133,7 +149,7 @@ class PhaseMonitor:
         if positions is not None:
             if len(positions) != 16:
                 raise ValueError(f"expected 16 canonical joints, got {len(positions)}")
-            self._observe(now, list(float(v) for v in positions))
+            self._observe(now, [float(value) for value in positions])
 
         # Losing proprioception mid-phase is a fault, not a slow tick: the
         # policy is still driving the arms off an observation nobody is checking.
@@ -142,15 +158,25 @@ class PhaseMonitor:
             if age > self.config.stale_state_s:
                 return Verdict(True, False, f"joint_states stale for {age:.2f}s")
 
+        # Every specified condition must hold at the same time. Both checks run
+        # every tick whatever the other says -- each one carries state (when the
+        # grasp armed, when the arm last moved) that only advances if it is
+        # asked.
+        wanted = 0
+        met: List[str] = []
         if self.until.grasp is not None:
-            verdict = self._check_grasp(now, elapsed)
-            if verdict.done:
-                return verdict
-
+            wanted += 1
+            reason = self._grasp_met(now, elapsed)
+            if reason is not None:
+                met.append(reason)
         if self.until.settled:
-            verdict = self._check_settled(now, elapsed)
-            if verdict.done:
-                return verdict
+            wanted += 1
+            reason = self._settled_met(now, elapsed)
+            if reason is not None:
+                met.append(reason)
+
+        if wanted and len(met) == wanted:
+            return Verdict(True, True, " and ".join(met))
 
         if elapsed >= self.until.timeout_s:
             if self.until.timeout_is_success:
@@ -166,7 +192,8 @@ class PhaseMonitor:
     def _observe(self, now: float, positions: List[float]) -> None:
         if self._last_positions is not None:
             moved = max(
-                abs(new - old) for new, old in zip(positions, self._last_positions)
+                abs(positions[index] - self._last_positions[index])
+                for index in ARM_INDICES
             )
             if moved > self.config.motion_eps:
                 self._motion_seen = True
@@ -181,10 +208,11 @@ class PhaseMonitor:
             return None
         return self._last_positions[GRIPPER_INDEX[self.until.side]]
 
-    def _check_grasp(self, now: float, elapsed: float) -> Verdict:
+    def _grasp_met(self, now: float, elapsed: float) -> Optional[str]:
+        """The reason the grasp condition is satisfied, or None."""
         finger = self._finger()
         if finger is None:
-            return Verdict.running()
+            return None
         if self.until.grasp == "closed":
             at_target = finger <= self.config.grasp_close_m
             at_opposite = finger >= self.config.grasp_open_m
@@ -195,34 +223,29 @@ class PhaseMonitor:
         if not self._grasp_armed:
             if at_opposite:
                 self._grasp_armed = True
-            return Verdict.running()
+            return None
 
         if not at_target:
             self._grasp_since = None
-            return Verdict.running()
+            return None
         if self._grasp_since is None:
             self._grasp_since = now
         if now - self._grasp_since >= self.until.hold_s:
-            return Verdict(
-                True,
-                True,
-                f"{self.until.side} gripper {self.until.grasp} "
-                f"({finger:.4f} m) held {self.until.hold_s:.1f}s at {elapsed:.1f}s",
+            return (
+                f"{self.until.side} gripper {self.until.grasp} ({finger:.4f} m) "
+                f"held {self.until.hold_s:.1f}s at {elapsed:.1f}s"
             )
-        return Verdict.running()
+        return None
 
-    def _check_settled(self, now: float, elapsed: float) -> Verdict:
+    def _settled_met(self, now: float, elapsed: float) -> Optional[str]:
+        """The reason the settle condition is satisfied, or None."""
         if not self._motion_seen or elapsed < self.config.settle_grace_s:
-            return Verdict.running()
+            return None
         if self._still_since is None:
-            return Verdict.running()
+            return None
         if now - self._still_since >= self.until.hold_s:
-            return Verdict(
-                True,
-                True,
-                f"arms settled for {self.until.hold_s:.1f}s at {elapsed:.1f}s",
-            )
-        return Verdict.running()
+            return f"arms settled for {self.until.hold_s:.1f}s at {elapsed:.1f}s"
+        return None
 
     def _unmet(self) -> str:
         """Why the early conditions did not fire -- the useful half of a timeout."""
@@ -235,8 +258,10 @@ class PhaseMonitor:
         if self.until.settled:
             if not self._motion_seen:
                 bits.append("settled never armed -- the arms never moved")
-            else:
+            elif self._still_since is None:
                 bits.append("arms never stopped moving")
+            else:
+                bits.append("arms stopped, but not for long enough")
         if self.until.operator:
             bits.append("no operator advance")
         return "; ".join(bits) or "no early condition set"

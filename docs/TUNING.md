@@ -37,13 +37,31 @@ The recorder's `gripper_scale = 0.05` is already applied on the way in.
 there so the file parses, not so the robot uses it. See
 [SAFETY.md](SAFETY.md#parking) for the procedure.
 
+## Carry envelopes — `params/arm_envelopes.yaml`
+
+**Placeholders: the full joint range**, which means the shipped envelopes pass on
+any pose at all and are useless as a check until narrowed.
+
+Measure them from real picks. Run the pick phase several times, let it end in its
+carry pose with the object held, and record the canonical joint vector each time
+(from `ros2 topic echo --once /joint_states`, reordered by name, or from the
+inference client's per-tick CSV). For each joint that decides how far the arm
+sticks out — shoulder pitch, elbow — take the range across runs and add a margin.
+Leave the wrist and roll joints unconstrained unless they actually change the
+envelope; the carry pose legitimately varies with where the object was, and an
+envelope that is too tight turns a good pick into an aborted mission.
+
+Set the finger bound first and tightest. It is what catches a dropped object
+before the base drives to the next station with an empty hand.
+
 ## Robot radius — `robot_radius` in both costmaps
 
 **Placeholder: 0.45 m.** Measure the circle that encloses the base *including the
-parked arms*, and set both costmaps and the inflation radius from it. With no
-obstacle layer this only affects the footprint Nav2 publishes — until a lidar is
-fitted, at which point it becomes the number that decides whether the robot fits
-through a gap.
+arms in their carry pose, holding the object* — not the tucked pose, because the
+carry pose is what the base drives in. Set both costmaps and the inflation radius
+from it. With no obstacle layer this only affects the footprint Nav2 publishes —
+until a lidar is fitted, at which point it becomes the number that decides
+whether the robot fits through a gap.
 
 ## Velocities — `max_linear`, `max_angular`, and the Nav2 limits
 

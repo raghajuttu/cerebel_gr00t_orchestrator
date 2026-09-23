@@ -1,0 +1,55 @@
+# Joint-space envelopes the base is allowed to drive with.
+#
+# A `check_arms` step passes when every constrained joint is inside its bounds.
+# Joints that are not listed are unconstrained -- which is the point: the carry
+# pose after a pick depends on where the object was, so an envelope should pin
+# the joints that decide whether the arm is tucked and leave the rest free.
+#
+# EVERY BOUND HERE IS A PLACEHOLDER. They are wide enough to pass on almost
+# anything, which makes them useless as a safety check until you replace them.
+#
+# How to measure one:
+#   1. Run the pick phase for real, several times, and let it end in its carry
+#      pose with the object held.
+#   2. For each run, read the 16-D canonical joint vector:
+#        ros2 topic echo --once /joint_states     # scrambled -- reorder by name
+#      or take it from the per-tick CSV the inference client wrote.
+#   3. For each joint that matters -- shoulder pitch, elbow, anything that
+#      decides how far the arm sticks out -- take the range across runs and add
+#      a margin. That is the bound.
+#   4. Leave wrist and roll joints out unless they actually change the envelope.
+#
+# Joint names must be canonical (see cerebel_orchestrator/joints.py):
+#   openarm_{left,right}_joint1..joint7, openarm_{left,right}_finger_joint1
+
+envelopes:
+  carry:
+    description: >
+      Holding the object after a pick, tucked enough to drive with. This is the
+      envelope that backs up `ends_parked: true` on the pick policy -- if the
+      policy ended somewhere else, the mission stops here rather than driving
+      off with the arm extended.
+    joints:
+      # PLACEHOLDERS -- the full joint range. Replace with measured bounds.
+      openarm_left_joint1:  [-3.14, 3.14]
+      openarm_left_joint2:  [-3.14, 3.14]
+      openarm_left_joint4:  [-3.14, 3.14]
+      openarm_right_joint1: [-3.14, 3.14]
+      openarm_right_joint2: [-3.14, 3.14]
+      openarm_right_joint4: [-3.14, 3.14]
+      # The gripper must still be holding the object. This bound is the one
+      # worth setting first -- it catches a dropped object before the base moves.
+      openarm_left_finger_joint1: [-0.01, 0.02]
+
+  home:
+    description: >
+      Both arms hanging down in the normal base pose, nothing held. Checked
+      after the final park so the mission ends in a state you can walk away
+      from.
+    joints:
+      openarm_left_joint1:  [-3.14, 3.14]
+      openarm_left_joint2:  [-3.14, 3.14]
+      openarm_left_joint4:  [-3.14, 3.14]
+      openarm_right_joint1: [-3.14, 3.14]
+      openarm_right_joint2: [-3.14, 3.14]
+      openarm_right_joint4: [-3.14, 3.14]

@@ -53,6 +53,12 @@ orchestrator:
     gripper_max_effort: 10.0     # matches the inference client's validated value
     command_grippers: true
 
+    # -- check_arms ---------------------------------------------------------
+    # Named joint envelopes the base is allowed to drive with. Set by the launch
+    # file to params/arm_envelopes.yaml; "" means check_arms steps are refused
+    # at startup rather than passing silently.
+    arm_envelopes_file: ""
+
     # -- interfaces ---------------------------------------------------------
     estop_topic: /orchestrator/estop
     base_enable_topic: /orchestrator/base_enable

@@ -3,6 +3,45 @@
 Every version, and the issue that motivated it. One logical change per commit,
 prefixed `feat:` / `fix:` / `docs:` / `chore:`.
 
+## v0.2.0 — 2026-09-23
+
+Reshaped around **pick-and-carry**: the pick policy picks the object and comes to
+rest holding it, the base drives in that carry pose, and the arms are tucked back
+to the normal hands-down pose only at the end. The v0.1.0 mission parked between
+the pick and the drive, which would have dropped the object.
+
+**Added**
+
+* `check_arms` step and `envelopes.py` — named per-joint envelopes with a
+  measured `[min, max]` per joint, checked before the base is allowed to move.
+  Unlisted joints are unconstrained, because a carry pose legitimately varies
+  with where the object was. A finger bound in the envelope is what catches a
+  dropped object before the robot drives to the next station with an empty hand.
+* `ends_parked: true` on a `run_policy` step — a claim that the policy finishes
+  in a drive-safe pose. It satisfies the park-before-navigate lint, and the
+  schema refuses it unless the phase also waits for `settled`, so the claim
+  cannot be made about a phase that could end mid-motion.
+* `params/arm_envelopes.yaml`, wired through the launch file.
+
+**Changed**
+
+* **`until` conditions now combine with AND.** `{grasp: closed, settled: true}`
+  ends the phase when the object is held *and* the arm has stopped — previously
+  whichever fired first won, so a grasp registered mid-reach would have sent the
+  base off with the arm still swinging.
+* `settled` now ignores the two finger joints. They are in metres while the arm
+  joints are in radians, so one `motion_eps` could not sensibly mean both, and a
+  gripper still closing is not an arm still moving.
+* `operator: true` can no longer be combined with `grasp` or `settled`; the two
+  intentions do not mix. `~/advance` and `~/skip` still work as an override in
+  any phase.
+* `park_poses.yaml` profiles are now `home` (the normal base pose, arms hanging
+  down), `ready` (where the training episodes start) and `travel` (for missions
+  that do park before driving). `home` is what the mission tucks back to.
+* `two_station_pick_place.yaml` rewritten to the carry sequence, with the pick
+  phase set to `on_fail: abort`: a retry would re-run only that step, and a
+  failed attempt that left the gripper closed can never re-arm `grasp: closed`.
+
 ## v0.1.0 — 2026-09-23
 
 First cut. Nothing has run on hardware; see

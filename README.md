@@ -4,7 +4,7 @@ Task-level orchestration for an autonomous bimanual pick-and-place on a mobile
 base: **Nav2 moves the base, GR00T N1.7 policies move the arms, and this package
 decides which of them is allowed to run.**
 
-**Version 0.1.0 — nothing here has run on hardware yet.** See
+**Version 0.2.0 — nothing here has run on hardware yet.** See
 [Status](#status) for exactly what is and is not proven, and
 [docs/BRINGUP.md](docs/BRINGUP.md) for the order to prove it in.
 
@@ -14,25 +14,37 @@ A mission is a list of steps in a YAML file. The orchestrator executes them:
 
 | Step | What runs | Base | Arms |
 |---|---|---|---|
-| `navigate` | Nav2 `NavigateToPose` to a named station | moving | parked |
+| `navigate` | Nav2 `NavigateToPose` to a named station | moving | holding a known pose |
 | `run_policy` | one `adibot_gr00t_client` process, with that phase's parameters | gated shut | moving |
 | `park_arms` | a joint-space ramp to a named pose | gated shut | moving |
+| `check_arms` | verify the arms are inside a named joint envelope | gated shut | still |
 | `wait` | nothing | gated shut | still |
 
 ```yaml
 steps:
-  - {step: park_arms, profile: travel}
+  - {step: park_arms, profile: home}                  # arms hanging down
   - {step: navigate, station: pick, on_fail: retry, retries: 2}
-  - {step: park_arms, profile: ready}
-  - step: run_policy
+  - {step: park_arms, profile: ready}                 # start in distribution
+  - step: run_policy                                  # pick, and hold it
     policy: pick_cube
-    until: {timeout_s: 90.0, grasp: closed, side: left, hold_s: 0.5}
-  - {step: park_arms, profile: travel}
-  - {step: navigate, station: place}
-  - step: run_policy
+    until: {timeout_s: 90.0, grasp: closed, side: left, settled: true, hold_s: 0.5}
+    ends_parked: true
+  - {step: check_arms, envelope: carry, seconds: 5.0} # verify the carry pose
+  - {step: navigate, station: place}                  # drive, object in hand
+  - step: run_policy                                  # place it
     policy: place_cube
-    until: {timeout_s: 90.0, grasp: open, side: left}
+    until: {timeout_s: 90.0, grasp: open, side: left, settled: true}
+  - {step: park_arms, profile: home}                  # tuck back down
+  - {step: check_arms, envelope: home, seconds: 5.0}
 ```
+
+**The base carries the object in the policy's own carry pose.** There is no park
+between the pick and the drive, because ramping the arms to a parked pose there
+would drop what the gripper is holding. `ends_parked: true` declares that the
+policy finishes somewhere drive-safe; `check_arms` measures whether it actually
+did, against an envelope taken from real picks, and stops the mission before the
+wheels turn if it did not — including when the object has been dropped, which
+shows up as the finger joint being outside its bound.
 
 Three design decisions shape everything else:
 
@@ -53,8 +65,10 @@ not depend on the mission logic being right. See [docs/SAFETY.md](docs/SAFETY.md
 
 **A phase ends for a stated reason.** A GR00T policy never reports success; it
 returns action chunks forever. So "the pick is done" is read off the robot — the
-gripper closing and staying closed, the arms settling, an operator call — with a
-mandatory timeout behind it. Every step reports `(ok, reason)`, and those reasons
+gripper closed on the object **and** the arm come to rest in its carry pose, or
+an operator call — with a mandatory timeout behind it. Conditions combine with
+AND, so a grasp registered mid-reach does not send the base off with the arm
+still swinging. Every step reports `(ok, reason)`, and those reasons
 are what the mission summary is made of. See
 [docs/MISSIONS.md](docs/MISSIONS.md#when-a-policy-phase-is-done).
 
@@ -159,10 +173,11 @@ e-stop, which cuts power.
 | `cerebel_orchestrator/arm_park.py` | the joint-space ramp, and a standalone node to check a pose |
 | `cerebel_orchestrator/base_adapter_node.py` | the interlock, the zero-holding, the clamps, the topic/type/TF shims |
 | `cerebel_orchestrator/probe_robot.py` | the read-only hardware survey |
+| `cerebel_orchestrator/envelopes.py` | named joint envelopes, and the check that the arms are inside one |
 | `cerebel_orchestrator/joints.py` | the canonical 16-DOF order, mirrored from the inference client |
 | `cerebel_orchestrator/fake_base.py`, `fake_arm.py` | the mocks the desk test runs against |
 | `params/nav2_diff_drive.yaml`, `nav2_holonomic.yaml` | Nav2 without SLAM, one file per wheel type |
-| `params/orchestrator.yaml`, `park_poses.yaml` | everything tunable, with every placeholder marked |
+| `params/orchestrator.yaml`, `park_poses.yaml`, `arm_envelopes.yaml` | everything tunable, with every placeholder marked |
 | `missions/` | `nav_only`, `policy_only`, `two_station_pick_place` |
 
 ## Documentation
@@ -181,17 +196,18 @@ e-stop, which cuts power.
 
 ## Status
 
-**v0.1.0 — written, tested in simulation of itself, never run on a robot.**
+**v0.2.0 — written, tested in simulation of itself, never run on a robot.**
 
-Proven: the pure-Python core, by 52 unit tests — mission validation, the step
+Proven: the pure-Python core, by 71 unit tests — mission validation, the step
 sequencing, retries, repeats, hold-and-resume, the grasp and settle conditions
-with their arming rules, and the inference-client command line including the
-quoting of `task_description`.
+with their arming rules and their conjunction, the joint envelopes, and the
+inference-client command line including the quoting of `task_description`.
 
 Not proven, and not to be trusted until it is: every number in `params/` (all the
 placeholders are marked), the Nav2 parameter sets against a real chassis, the base
 adapter against a real vendor driver, the park poses (all zeros — deliberately
-wrong), and the whole thing end to end. `enable_park` is off by default for this
+wrong), the carry envelope (the full joint range — deliberately useless until
+measured), and the whole thing end to end. `enable_park` is off by default for this
 reason: a `park_arms` step reports success without moving until you turn it on.
 
 Open questions that the hardware decides, not the code — the chassis's ROS

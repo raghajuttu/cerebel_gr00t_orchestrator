@@ -7,7 +7,7 @@ how a bad station pose gets blamed on the policy.
 ## 0. Build and validate, anywhere
 
 ```bash
-python -m pytest tests -q                        # 52 tests, no ROS needed
+python -m pytest tests -q                        # 71 tests, no ROS needed
 python -m cerebel_orchestrator.mission missions/*.yaml
 ```
 
@@ -127,12 +127,24 @@ the object is picked up, not before and not on the clock.
 
 ## 7. Park poses
 
-Follow [SAFETY.md](SAFETY.md#parking) exactly. Fill in `params/park_poses.yaml`,
-check each profile standalone at `max_joint_speed:=0.05`, from several starting
-poses, with a hand on the e-stop.
+Follow [SAFETY.md](SAFETY.md#parking) exactly. Fill in `params/park_poses.yaml`
+— `home` is the normal base pose with both arms hanging down, `ready` is where
+the training episodes start — and check each profile standalone at
+`max_joint_speed:=0.05`, from several starting poses, with a hand on the e-stop.
 
 **Check:** each profile converges from anywhere a policy phase can leave the arm,
 with nothing near the chassis on the way.
+
+## 7b. The carry envelope
+
+Run the pick phase a few more times and record where the arm ends up holding the
+object. Narrow the `carry` envelope in `params/arm_envelopes.yaml` around those
+runs, finger bound first — see [TUNING.md](TUNING.md#carry-envelopes).
+
+**Check:** `check_arms [carry]` passes within a second on a good pick, and fails
+with a named joint when you deliberately stop the phase early or take the object
+out of the gripper. Test the failure case — an envelope that has never rejected
+anything has not been shown to work.
 
 ## 8. Everything
 
@@ -142,8 +154,10 @@ ros2 launch cerebel_orchestrator orchestrator.launch.py \
 ros2 service call /orchestrator/start std_srvs/srv/Trigger
 ```
 
-**Check:** the sequence runs; the arms are parked before every base move; each
-policy phase ends on its grasp condition. Then add `repeat: 2` to the mission and
+**Check:** the sequence runs; the base drives to the place station with the
+object held in the pick policy's carry pose; `check_arms` passes before that
+drive; each policy phase ends on its grasp-and-settled condition; the arms are
+tucked back to `home` at the end. Then add `repeat: 2` to the mission and
 run it twice in a row — that is where odometry drift shows up, and it is the first
 real measure of whether dead reckoning is good enough for this task.
 

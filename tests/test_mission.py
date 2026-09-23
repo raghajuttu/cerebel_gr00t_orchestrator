@@ -175,3 +175,94 @@ def test_a_repeating_mission_is_linted_across_the_wrap():
 
 def test_a_repeating_mission_that_parks_last_is_clean():
     assert lint([PARK, NAV, POLICY, PARK], repeat=3) == []
+
+
+# -- ends_parked and check_arms ---------------------------------------------
+
+
+CARRY_STEPS = [
+    PARK,
+    NAV,
+    {
+        "step": "run_policy",
+        "policy": "grab",
+        "until": {"timeout_s": 90, "grasp": "closed", "side": "left", "settled": True},
+        "ends_parked": True,
+    },
+    {"step": "check_arms", "envelope": "carry", "seconds": 5.0},
+    NAV,
+]
+
+
+def test_a_policy_that_ends_parked_satisfies_the_lint():
+    assert lint(CARRY_STEPS) == []
+
+
+def test_ends_parked_without_settled_is_refused():
+    raw = yaml.safe_load(GOOD)
+    raw["steps"] = [
+        {
+            "step": "run_policy",
+            "policy": "grab",
+            "until": {"timeout_s": 90, "grasp": "closed", "side": "left"},
+            "ends_parked": True,
+        }
+    ]
+    with pytest.raises(MissionError, match="no `settled`"):
+        Mission.from_dict(raw)
+
+
+def test_check_arms_also_satisfies_the_lint_on_its_own():
+    steps = [
+        PARK,
+        NAV,
+        {"step": "run_policy", "policy": "grab", "until": {"timeout_s": 10}},
+        {"step": "check_arms", "envelope": "carry"},
+        NAV,
+    ]
+    assert lint(steps) == []
+
+
+def test_check_arms_needs_an_envelope_name():
+    raw = yaml.safe_load(GOOD)
+    raw["steps"] = [{"step": "check_arms"}]
+    with pytest.raises(MissionError, match="envelope"):
+        Mission.from_dict(raw)
+
+
+def test_a_mission_with_only_checks_is_not_told_it_never_parks():
+    steps = [
+        {"step": "check_arms", "envelope": "home"},
+        NAV,
+    ]
+    assert lint(steps) == []
+
+
+def test_operator_cannot_be_mixed_with_a_watched_condition():
+    raw = yaml.safe_load(GOOD)
+    raw["steps"] = [
+        {
+            "step": "run_policy",
+            "policy": "grab",
+            "until": {"timeout_s": 30, "operator": True, "settled": True},
+        }
+    ]
+    with pytest.raises(MissionError, match="operator cannot be combined"):
+        Mission.from_dict(raw)
+
+
+def test_the_shipped_pick_and_carry_mission_is_clean():
+    import pathlib
+
+    from cerebel_orchestrator.mission import navigate_safety_warnings
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    mission = Mission.load(str(root / "missions" / "two_station_pick_place.yaml"))
+    assert navigate_safety_warnings(mission) == []
+    # The drive to the place station happens with the object in hand: no park
+    # between the pick policy and that navigate.
+    kinds = [step.kind for step in mission.steps]
+    pick = kinds.index("run_policy")
+    assert kinds[pick + 1] == "check_arms" and kinds[pick + 2] == "navigate"
+    assert mission.steps[pick].ends_parked
+    assert mission.steps[pick].until.settled and mission.steps[pick].until.grasp == "closed"

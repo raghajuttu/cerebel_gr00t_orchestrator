@@ -19,21 +19,27 @@ is off by default and has its own document section
 At any moment exactly one thing is allowed to move:
 
 ```
-phase        base            arms                         who commands the arms
-----------   -------------   --------------------------   ---------------------
-navigate     Nav2            holding their parked pose    nobody
-run_policy   gate shut       policy                       the child process
-park_arms    gate shut       ramp                         the orchestrator
-wait         gate shut       holding                      nobody
-hold/estop   gate shut       holding                      nobody
+phase        base            arms                          who commands the arms
+----------   -------------   ---------------------------   ---------------------
+navigate     Nav2            holding a known pose          nobody
+run_policy   gate shut       policy                        the child process
+park_arms    gate shut       ramp                          the orchestrator
+check_arms   gate shut       holding, being verified       nobody
+wait         gate shut       holding                       nobody
+hold/estop   gate shut       holding                       nobody
 ```
 
 "Holding" is not a null state. `forward_position_controller` latches its last
 command, so after the inference client exits the arms stay exactly where the last
-action chunk put them, powered and stiff. That is the whole reason `park_arms`
-exists as an explicit step: a `navigate` that is not preceded by one drives the
-base with the arms wherever the policy happened to stop. `mission.py` lints for
-it and the orchestrator prints the warnings at startup.
+action chunk put them, powered and stiff.
+
+That latching is what makes pick-and-carry work: the pick policy ends holding the
+object, the client is stopped, and the arms keep holding it through the drive. It
+is also what makes an unguarded `navigate` dangerous, because "wherever the last
+action chunk put them" is only safe if somebody established what that is. A
+navigate is therefore preceded by one of three things — `park_arms`, `check_arms`,
+or a `run_policy` marked `ends_parked: true`. `mission.py` lints for it and the
+orchestrator prints the warnings at startup.
 
 ## Why the inference client is a child process
 

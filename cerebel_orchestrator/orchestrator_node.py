@@ -6,6 +6,7 @@ reads that file, asks ``MissionRunner`` what comes next, and carries it out:
     navigate    -> Nav2 NavigateToPose            (base moves, arms parked)
     run_policy  -> a GR00T inference client       (arms move, base gated shut)
     park_arms   -> a ramp to a known pose         (arms move, base gated shut)
+    check_arms  -> verify the arms are inside a named envelope (nothing moves)
     wait        -> nothing at all
 
 Three properties are deliberate:
@@ -39,6 +40,7 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from .arm_park import ArmParker, load_park_poses
+from .envelopes import load_envelopes
 from .joints import reorder_by_name
 from .mission import Mission, MissionError, navigate_safety_warnings
 from .nav_client import NavClient
@@ -97,6 +99,10 @@ class OrchestratorNode(Node):
         self.declare_parameter("gripper_max_effort", 10.0)
         self.declare_parameter("command_grippers", True)
 
+        # Envelopes for check_arms -- the measurement that backs up a policy's
+        # ends_parked claim before the base is allowed to move.
+        self.declare_parameter("arm_envelopes_file", "")
+
         # Interfaces
         self.declare_parameter("estop_topic", "/orchestrator/estop")
         self.declare_parameter("base_enable_topic", "/orchestrator/base_enable")
@@ -120,6 +126,8 @@ class OrchestratorNode(Node):
         self.monitor_config.validate()
 
         self.mission = self._load_mission(str(get("mission_file").value))
+        self.envelopes = load_envelopes(str(get("arm_envelopes_file").value))
+        self._check_mission_envelopes()
         self.runner = MissionRunner(self.mission)
 
         self.nav = NavClient(self, str(get("nav_action").value))
@@ -184,6 +192,20 @@ class OrchestratorNode(Node):
         mission = Mission.load(path)
         return mission
 
+    def _check_mission_envelopes(self) -> None:
+        """Fail at startup, not three steps into the mission."""
+        wanted = {
+            step.envelope
+            for step in self.mission.steps
+            if step.kind == "check_arms" and step.envelope
+        }
+        missing = sorted(name for name in wanted if name not in self.envelopes)
+        if missing:
+            raise MissionError(
+                f"check_arms names envelope(s) {missing} that are not in "
+                f"arm_envelopes_file (have {sorted(self.envelopes) or 'none'})"
+            )
+
     def _print_banner(self) -> None:
         log = self.get_logger()
         log.info(f"=== cerebel orchestrator | mission {self.mission.name} ===")
@@ -206,6 +228,12 @@ class OrchestratorNode(Node):
             )
         for warning in navigate_safety_warnings(self.mission):
             log.warning(f"  mission lint: {warning}")
+        for name in sorted(self.envelopes):
+            envelope = self.envelopes[name]
+            log.info(
+                f"  envelope {name:<9}: {len(envelope.limits)} joints constrained"
+                + (f" -- {envelope.description}" if envelope.description else "")
+            )
         if not self.parker.enable:
             log.warning(
                 "  park is disabled: park_arms steps report success without moving. "
@@ -345,7 +373,7 @@ class OrchestratorNode(Node):
                 self._end_action(action, False, error)
             return
 
-        # wait: nothing to start.
+        # check_arms and wait: nothing to start.
 
     def _poll_action(self, action: Action) -> Optional[Tuple[bool, str]]:
         elapsed = self._now() - self._phase_started
@@ -374,8 +402,32 @@ class OrchestratorNode(Node):
                 return (False, f"park timed out after {self.park_timeout_s:.0f}s")
             return self.parker.poll()
 
+        if action.kind == "check_arms":
+            return self._poll_check_arms(action, elapsed)
+
         if elapsed >= float(action.seconds or 0.0):
             return (True, f"waited {elapsed:.1f}s")
+        return None
+
+    def _poll_check_arms(self, action: Action, elapsed: float) -> Optional[Tuple[bool, str]]:
+        """Wait for the arms to be inside the envelope; fail if they never are.
+
+        This is polled rather than sampled once because a policy phase can end
+        the instant its condition holds, with the last commanded pose still
+        being tracked -- a few hundred milliseconds of settling is normal and is
+        not a reason to abort a mission.
+        """
+        envelope = self.envelopes[str(action.step.envelope)]
+        deadline = float(action.seconds or 5.0)
+        if self._state_seen and self._positions is not None:
+            violation = envelope.check(self._positions)
+            if violation is None:
+                return (True, f"arms inside envelope {envelope.name!r} after {elapsed:.1f}s")
+            if elapsed >= deadline:
+                return (False, violation)
+            return None
+        if elapsed >= deadline:
+            return (False, f"no /joint_states -- cannot verify envelope {envelope.name!r}")
         return None
 
     def _end_action(self, action: Action, ok: bool, reason: str) -> None:

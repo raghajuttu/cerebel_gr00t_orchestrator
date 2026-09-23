@@ -155,3 +155,61 @@ def test_config_and_state_shape_are_checked():
     monitor = PhaseMonitor(Until(timeout_s=5), CFG, 0.0)
     with pytest.raises(ValueError, match="16 canonical joints"):
         monitor.update(0.0, [0.0] * 14)
+
+
+# -- conditions combine with AND (the pick-and-carry check) ------------------
+
+
+def test_grasp_and_settled_both_have_to_hold():
+    """The carry check: object held AND the arm has come to rest."""
+    until = Until(timeout_s=60, grasp="closed", side="left", settled=True, hold_s=0.5)
+    monitor = PhaseMonitor(until, CFG, start_time=0.0)
+
+    # Reaching for the object, gripper open: arms the grasp, arms the settle.
+    t = 0.0
+    for i in range(40):
+        t = i * 0.1
+        assert not monitor.update(t, state(left_finger=0.040, arm=i * 0.05)).done
+
+    # Gripper closes while the arm is still moving -- a grasp mid-reach must NOT
+    # end the phase, because the base would drive off with the arm swinging.
+    for i in range(40, 55):
+        t = i * 0.1
+        assert not monitor.update(t, state(left_finger=0.005, arm=i * 0.05)).done
+
+    # Now the arm comes to rest holding the object.
+    held = state(left_finger=0.005, arm=54 * 0.05)
+    monitor.update(t + 0.1, held)
+    monitor.update(t + 0.2, held)
+    verdict = monitor.update(t + 1.0, held)
+    assert verdict.done and verdict.ok
+    assert "gripper closed" in verdict.reason and "settled" in verdict.reason
+
+
+def test_settling_without_the_object_does_not_end_the_phase():
+    until = Until(timeout_s=8.0, grasp="closed", side="left", settled=True, hold_s=0.5)
+    monitor = PhaseMonitor(until, CFG, start_time=0.0)
+    for i in range(40):  # moves, gripper stays open: the grasp never fires
+        monitor.update(i * 0.1, state(left_finger=0.040, arm=i * 0.05))
+    still = state(left_finger=0.040, arm=39 * 0.05)
+    for t in (4.1, 4.2, 5.0, 6.0, 7.0):
+        assert not monitor.update(t, still).done
+    verdict = monitor.update(8.1, still)
+    assert verdict.done and not verdict.ok
+    assert "grasp left closed armed" in verdict.reason
+
+
+def test_a_closing_gripper_is_not_an_arm_still_moving():
+    """The fingers are excluded from the settle check -- and are in metres."""
+    until = Until(timeout_s=60, settled=True, hold_s=0.5)
+    monitor = PhaseMonitor(until, CFG, start_time=0.0)
+    t = 0.0
+    for i in range(40):
+        t = i * 0.1
+        monitor.update(t, state(arm=i * 0.05))
+    # The arm has stopped; only the gripper is still travelling, in jumps far
+    # bigger than motion_eps.
+    monitor.update(t + 0.1, state(arm=39 * 0.05, left_finger=0.040))
+    monitor.update(t + 0.2, state(arm=39 * 0.05, left_finger=0.020))
+    verdict = monitor.update(t + 1.0, state(arm=39 * 0.05, left_finger=0.002))
+    assert verdict.done and verdict.ok

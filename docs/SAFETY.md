@@ -44,6 +44,30 @@ This is the second enforcement of the kinematic assumption (the first is in the
 Nav2 parameter file) and it is the one that protects a differential base from
 being launched with `nav2_holonomic.yaml` by mistake.
 
+## Driving with the object in hand
+
+The shipped mission does not park between the pick and the drive: the pick policy
+finishes holding the object in its carry pose, and that is the pose the base
+travels in. Parking there would drop the object.
+
+This is a real trade. A parked pose is one you chose and measured; a carry pose
+is whatever a neural network happened to end in on this attempt. Three things
+keep it honest, and all three have to be set up before the mission is run
+unattended:
+
+1. **The phase only ends when the arm has stopped** — `settled` alongside
+   `grasp` in the `until` block. Without it the base could start moving while the
+   arm was still swinging.
+2. **`check_arms` verifies the pose** against a measured envelope before the
+   navigate step, and fails the mission if the arm is somewhere else or the
+   gripper has opened. See [MISSIONS.md](MISSIONS.md#carrying-the-object-ends_parked-and-check_arms).
+3. **The costmap footprint has to enclose the carry pose**, not the tucked one.
+   `robot_radius` is a placeholder; measure it with the arm holding something.
+
+The first mission with a real object should be watched with a hand on the e-stop
+for exactly this reason: the envelope is only as good as the runs it was measured
+from, and the first few runs are the ones it was not measured from.
+
 ## Parking
 
 `park_arms` is the only place the orchestrator commands the arms, and it is
@@ -73,14 +97,16 @@ Therefore, before setting `enable_park: true`:
    on the e-stop:
    ```bash
    ros2 run cerebel_orchestrator arm_park --ros-args \
-       -p enable_park:=true -p profile:=travel \
+       -p enable_park:=true -p profile:=home \
        -p park_poses_file:=<path> -p max_joint_speed:=0.05
    ```
 3. Only then enable it in a mission.
 
 The shipped poses are all zeros. On the OpenArm that is the arm straight out —
 deliberately a pose you would never travel with, so that an unedited file cannot
-be mistaken for a configured one.
+be mistaken for a configured one. The same goes for the envelopes in
+`params/arm_envelopes.yaml`: they are set to the full joint range, so they pass on
+anything until you narrow them.
 
 ## The hold path
 
@@ -96,11 +122,15 @@ base gate shuts. It does **not** relax the arms — they hold their pose, powere
 way to resume a policy phase or a Nav2 goal from the middle after the actuators
 have been cut, so the step is re-issued whole, and it does not consume a retry.
 This puts a real constraint on mission design: a step has to be safe to run twice.
-`navigate` and `park_arms` are by construction; a `run_policy` step is safe to
-repeat if the policy can recover from the state the interrupted attempt left —
-which for a pick usually means the object is still somewhere the policy can see
-it, and if it is already in the gripper, that the policy tolerates starting
-holding it.
+`navigate`, `park_arms` and `check_arms` are by construction; a `run_policy` step
+is safe to repeat if the policy can recover from the state the interrupted attempt
+left — which for a pick usually means the object is still somewhere the policy
+can see it, and if it is already in the gripper, that the policy tolerates
+starting while holding it.
+
+Note the interaction with the grasp condition: a pick phase restarted with the
+object already held can never arm `grasp: closed`, so it will run to its timeout.
+Resuming a held pick phase generally means putting the object back first.
 
 ## The software e-stop is not an e-stop
 

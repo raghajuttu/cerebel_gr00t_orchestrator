@@ -57,6 +57,11 @@ def _setup(context, *_args, **_kwargs):
     park_poses = get("park_poses_file")
     if not park_poses and get("enable_park") == "true":
         park_poses = os.path.join(share, "params", "park_poses.yaml")
+    # check_arms steps need envelopes; default to the shipped file so a mission
+    # that uses one does not fail at startup for want of a launch argument.
+    envelopes = get("arm_envelopes_file") or os.path.join(
+        share, "params", "arm_envelopes.yaml"
+    )
 
     # dry_run is the convenience that sets both mocks; either can also be set
     # on its own, which is how the desk test keeps navigation real.
@@ -67,6 +72,7 @@ def _setup(context, *_args, **_kwargs):
         "mock_policy": dry_run or get("mock_policy") == "true",
         "mock_nav": dry_run or get("mock_nav") == "true",
         "enable_park": get("enable_park") == "true",
+        "arm_envelopes_file": envelopes,
     }
     if park_poses:
         overrides["park_poses_file"] = park_poses
@@ -110,6 +116,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("mission", description="mission name or path"),
             DeclareLaunchArgument("params_file", default_value=""),
             DeclareLaunchArgument("park_poses_file", default_value=""),
+            DeclareLaunchArgument("arm_envelopes_file", default_value=""),
             DeclareLaunchArgument(
                 "auto_start",
                 default_value="false",

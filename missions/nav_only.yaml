@@ -19,7 +19,7 @@ stations:
 policies: {}
 
 steps:
-  - {step: park_arms, profile: travel}
+  - {step: park_arms, profile: home}
   - {step: navigate, station: left}
   - {step: wait, seconds: 2.0}
   - {step: navigate, station: home}
