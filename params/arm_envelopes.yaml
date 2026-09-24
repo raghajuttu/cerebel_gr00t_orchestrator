@@ -30,16 +30,28 @@ envelopes:
       policy ended somewhere else, the mission stops here rather than driving
       off with the arm extended.
     joints:
-      # PLACEHOLDERS -- the full joint range. Replace with measured bounds.
-      openarm_left_joint1:  [-3.14, 3.14]
-      openarm_left_joint2:  [-3.14, 3.14]
-      openarm_left_joint4:  [-3.14, 3.14]
-      openarm_right_joint1: [-3.14, 3.14]
-      openarm_right_joint2: [-3.14, 3.14]
-      openarm_right_joint4: [-3.14, 3.14]
-      # The gripper must still be holding the object. This bound is the one
-      # worth setting first -- it catches a dropped object before the base moves.
-      openarm_left_finger_joint1: [-0.01, 0.02]
+      # MEASURED: p2..p98 of the final frame of all 152 pick episodes, arm
+      # joints widened by 0.10 rad. The finger bounds are NOT widened -- they
+      # are the check that the object is still held.
+      openarm_left_joint1:         [-0.441,  0.307]
+      openarm_left_joint2:         [-0.610, -0.078]
+      openarm_left_joint3:         [-0.469,  0.217]
+      openarm_left_joint4:         [ 1.768,  2.348]
+      openarm_left_joint5:         [-0.720, -0.066]
+      openarm_left_joint6:         [-0.414,  0.152]
+      openarm_left_joint7:         [ 0.038,  0.761]
+      # Still holding: a released or dropped object reads ~0.048 and fails here.
+      openarm_left_finger_joint1:  [ 0.006,  0.016]
+      openarm_right_joint1:        [-0.064,  0.235]
+      openarm_right_joint2:        [-0.084,  0.202]
+      openarm_right_joint3:        [-1.078,  0.112]
+      openarm_right_joint4:        [ 0.017,  0.348]
+      openarm_right_joint5:        [-0.458,  0.692]
+      openarm_right_joint6:        [-0.720, -0.155]
+      openarm_right_joint7:        [-0.668, -0.213]
+      # The right hand is empty at the end of a pick; the handover is later.
+      openarm_right_finger_joint1: [ 0.045,  0.050]
+
 
   home:
     description: >
@@ -53,3 +65,34 @@ envelopes:
       openarm_right_joint1: [-3.14, 3.14]
       openarm_right_joint2: [-3.14, 3.14]
       openarm_right_joint4: [-3.14, 3.14]
+
+  travel:
+    description: >
+      Both arms tucked, nothing held, about to drive. Checked before every
+      empty-handed `move_base` in three_station_kit -- the base moves with two
+      7-DOF arms on top of it, and after a place phase they are wherever the
+      policy left them.
+
+      The difference from `carry` is the gripper bound: this envelope requires
+      the left finger OPEN, which is what proves the place actually released
+      the object rather than the phase ending on a transient.
+    joints:
+      # MEASURED: p2..p98 of the final frame of all 150 place episodes, arm
+      # joints widened by 0.10 rad.
+      openarm_left_joint1:         [-0.156,  0.172]
+      openarm_left_joint2:         [-0.264, -0.000]
+      openarm_left_joint3:         [ 0.232,  1.043]
+      openarm_left_joint4:         [ 0.107,  0.457]
+      openarm_left_joint5:         [-0.783, -0.061]
+      openarm_left_joint6:         [-0.148,  0.378]
+      openarm_left_joint7:         [-0.164,  0.275]
+      # Both hands empty -- the object went in the box, not onto the floor.
+      openarm_left_finger_joint1:  [ 0.045,  0.050]
+      openarm_right_joint1:        [-0.111,  0.241]
+      openarm_right_joint2:        [-0.051,  0.216]
+      openarm_right_joint3:        [-1.046,  0.593]
+      openarm_right_joint4:        [ 0.041,  0.310]
+      openarm_right_joint5:        [-0.642,  0.843]
+      openarm_right_joint6:        [-0.602,  0.047]
+      openarm_right_joint7:        [-0.485,  0.025]
+      openarm_right_finger_joint1: [ 0.045,  0.050]

@@ -26,6 +26,24 @@ orchestrator:
     # -- navigation ---------------------------------------------------------
     nav_action: navigate_to_pose
     nav_timeout_s: 120.0
+
+    # --- move_base: the wheel-arc stand-in for Nav2 -----------------------
+    # This chassis publishes no odometry and no odom->base_link transform, so
+    # Nav2 has nothing to close its loop on. A move_base step drives until the
+    # wheels have turned the commanded distance, then stops. See
+    # cerebel_orchestrator/base_move.py and docs/NAVIGATION.md.
+    wheel_rpm_topic: /all_wheel_rpm
+    base_cmd_out_topic: /cmd_vel     # into base_adapter, where Nav2 would go
+    move_speed_mps: 0.10             # move_base.py's translation default
+    move_min_speed_mps: 0.03         # below this the 1 rpm deadband truncates
+    move_taper_m: 0.15               # ease off this far out, to cut overshoot
+    # Calibration coefficients: measured distance / integrated distance. These
+    # came off move_base.py, which measured them on hardware. RE-MEASURE on the
+    # floor this robot actually runs on -- they are surface-dependent.
+    move_scale_lateral: 1.05
+    move_scale_axial: 1.02
+    move_tolerance_m: 0.01
+    move_timeout_s: 60.0
     nav_server_wait_s: 20.0
 
     # -- policies -----------------------------------------------------------
@@ -38,6 +56,31 @@ orchestrator:
     # How long the client is allowed to take to connect to the policy server
     # before a missing /joint_states counts against it.
     policy_startup_grace_s: 20.0
+
+    # --- re-initialising the arm controller between policies --------------
+    # The operator's manual procedure on this robot is: bring the forward
+    # position controller up, run one VLA, bring it up again, run the next. The
+    # orchestrator switches policies by restarting the inference client, so it
+    # has to do that same step -- this is where it goes. It runs once,
+    # immediately before each client starts; a non-zero exit fails the phase
+    # before anything moves.
+    #
+    # EMPTY BY DEFAULT because the exact command is not known here. Fill it in
+    # with whatever you type by hand today, split into a list, e.g.
+    #   policy_prepare_cmd: ["ros2", "control", "switch_controllers",
+    #                        "--activate", "left_forward_position_controller",
+    #                        "--activate", "right_forward_position_controller"]
+    # or the spawner, or a script that wraps it.
+    #
+    # WARNING: whatever this does must NOT disturb what the arms are holding.
+    # The pick-and-carry step depends on the controller latching its last
+    # command across the switch; if re-initialising re-seeds or drops that
+    # latch, the object falls between the pick and the place.
+    policy_prepare_cmd: [""]
+    policy_prepare_timeout_s: 15.0
+    # Pause after the command returns, before the client's first chunk lands.
+    # A controller that has just been activated is not necessarily tracking yet.
+    policy_prepare_settle_s: 0.0
     # Ping every policy server the mission uses, once, before anything moves.
     # Over an SSH forward the local port accepts connections whenever the tunnel
     # process is alive, so only a round trip proves the GPU box is there.
@@ -45,14 +88,30 @@ orchestrator:
     preflight_timeout_ms: 5000
 
     # -- when a policy phase is done (MEASURE all four) ---------------------
-    # Finger joint positions in metres, read off a run log: empty-and-open,
-    # closed-on-the-object, released. Put the thresholds either side of the gap.
-    grasp_close_m: 0.010
-    grasp_open_m: 0.030
+    # Finger joint positions in metres. MEASURED from the
+    # 20260923_pick_and_scan_and_place_01 dataset, 302 episodes, both sides:
+    #   closed on an object : 0.006 .. 0.019   (p99 = 0.0188)
+    #   open                : 0.045 .. 0.050   (p1  = 0.0447)
+    # The thresholds sit a quarter and three quarters across that gap.
+    # NOTE the previous values (0.010 / 0.030) were guesses and 0.010 was below
+    # where a lipstick or an oil bottle actually closes (median 0.0150), so the
+    # `grasp: closed` condition could never have fired for those two picks.
+    grasp_close_m: 0.025
+    grasp_open_m: 0.038
     # Joint SPEED in rad/s below which an arm counts as "not moving" for
     # `settled`. A speed, not a per-tick delta -- it is computed from the
     # /joint_states timestamps, so it means the same thing at any loop rate.
-    motion_eps: 0.05
+    # MEASURED: the demonstrations do NOT end with the arms at rest -- the
+    # recording stops while they are still moving. Fraction of episodes in
+    # which `settled` would ever fire, over the last 2 s:
+    #     motion_eps   hold 0.3s   hold 0.5s
+    #        0.05          40%         17%
+    #        0.10          61%         28%
+    #        0.20          91%         67%
+    # 0.05 with hold_s 0.5 -- the old default -- would have timed out roughly
+    # five phases in six. Use 0.20 with hold_s 0.3, and prefer dropping
+    # `settled` altogether where a gripper condition already decides the phase.
+    motion_eps: 0.20
     settle_grace_s: 3.0
     # A policy phase fails if /joint_states goes quiet for this long.
     stale_state_s: 1.0
@@ -67,6 +126,19 @@ orchestrator:
     park_timeout_s: 60.0
     gripper_max_effort: 10.0     # matches the inference client's validated value
     command_grippers: true
+
+    # --- holding the arms across a policy switch --------------------------
+    # The pick ends with the object in the gripper and the place policy starts
+    # from that exact pose. Between the two, one client is killed and the next
+    # spends seconds building its limits and pinging the server -- so this
+    # republishes the last COMMANDED arm vector at the execution rate until the
+    # new client's first chunk lands. Never the measured state: the follower
+    # sits a standing offset behind the command and holding the measurement
+    # would walk the arm backwards at every switch.
+    hold_arms_between_policies: true
+    hold_quiet_s: 0.25          # topic silence before a hold takes over
+    left_arm_command_topic: /left_forward_position_controller/commands
+    right_arm_command_topic: /right_forward_position_controller/commands
 
     # -- check_arms ---------------------------------------------------------
     # Named joint envelopes the base is allowed to drive with. Set by the launch
@@ -84,7 +156,9 @@ base_adapter:
     # Replace this whole block with what `probe_robot` wrote. The defaults are
     # the Nav2-standard names and will be wrong on most vendor chassis.
     nav_cmd_topic: /cmd_vel
-    base_cmd_topic: /base/cmd_vel
+    # OBSERVED, from move_base/move_base.py: this is the topic the chassis
+    # driver subscribes to. Confirm with probe_robot before the first run.
+    base_cmd_topic: /svtrobot_cmd
     base_cmd_type: Twist         # or TwistStamped
     vendor_odom_topic: /odom
     odom_topic: ""               # "" -> do not republish odometry
@@ -102,4 +176,14 @@ base_adapter:
     # Deliberately slow first-run limits.
     max_linear: 0.15
     max_angular: 0.4
-    allow_lateral: false         # true ONLY for a mecanum/omni base
+    # This is a four-wheel SWERVE chassis (move_base/move_base.py drives it
+    # with linear.y), so lateral motion is real and must be allowed.
+    allow_lateral: true
+
+    # Crab correction. Commanded pure-lateral motion comes out diagonal on this
+    # chassis, by different amounts each way. These are move_base.py's measured
+    # values, as a linear.x component per unit |linear.y|. Re-measure with
+    # `./move_base.py left 100 --trim <value>` and take the one that runs
+    # straightest; left and right are calibrated independently.
+    lateral_trim_left: -0.025
+    lateral_trim_right: -0.040
