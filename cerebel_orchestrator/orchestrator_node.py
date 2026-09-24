@@ -221,6 +221,7 @@ class OrchestratorNode(Node):
             tolerance=float(get("park_tolerance").value),
             command_grippers=bool(get("command_grippers").value),
         )
+        self._check_mission_park_profiles()
 
         self.hold_arms = bool(get("hold_arms_between_policies").value)
         self.holder = ArmHold(foreign_quiet_s=float(get("hold_quiet_s").value))
@@ -335,6 +336,19 @@ class OrchestratorNode(Node):
                 f"arm_envelopes_file (have {sorted(self.envelopes) or 'none'})"
             )
 
+
+
+    def _check_mission_park_profiles(self) -> None:
+        """Every park_arms step must name a profile that exists.
+
+        Separate from the envelope check because it needs the parker, which is
+        built later -- and calling it too early is exactly the bug this
+        replaced, an AttributeError before the node could even start.
+
+        Checked even when enable_park is false: a missing profile makes the step
+        FAIL rather than be skipped, and that failure lands mid-mission with the
+        arms in the air instead of here.
+        """
         profiles = {
             step.profile
             for step in self.mission.steps
@@ -344,9 +358,7 @@ class OrchestratorNode(Node):
         if unknown:
             raise MissionError(
                 f"the mission names park profile(s) {unknown} that are not in "
-                f"park_poses_file (have {sorted(self.parker.poses) or 'none'}). "
-                "A park_arms step must name a real profile even when enable_park "
-                "is false, or the step fails mid-mission instead of being skipped."
+                f"park_poses_file (have {sorted(self.parker.poses) or 'none'})"
             )
 
     def _print_banner(self) -> None:

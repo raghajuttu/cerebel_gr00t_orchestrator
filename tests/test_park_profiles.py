@@ -53,3 +53,35 @@ def test_end_action_logs_at_two_call_sites():
     assert "level = self.get_logger().info if ok else self.get_logger().error" not in source
     assert 'self.get_logger().info(f"<-- ok: {reason}")' in source
     assert 'self.get_logger().error(f"<-- FAILED: {reason}")' in source
+
+
+def test_the_park_check_runs_after_the_parker_is_built():
+    """Ordering regression: the check used self.parker before it existed.
+
+    The node died with AttributeError before it could start, which no amount of
+    mission validation catches -- it is construction order. Checked on the
+    source because reproducing it needs a live ROS node.
+    """
+    source = open("cerebel_orchestrator/orchestrator_node.py", encoding="utf-8").read()
+    lines = source.splitlines()
+
+    def line_of(needle):
+        for i, line in enumerate(lines):
+            if needle in line:
+                return i
+        raise AssertionError(f"not found in orchestrator_node.py: {needle!r}")
+
+    built = line_of("self.parker = ArmParker(")
+    checked = line_of("self._check_mission_park_profiles()")
+    assert checked > built, (
+        "the park-profile check reads self.parker, so it must come after the "
+        f"parker is constructed (built at line {built + 1}, checked at {checked + 1})"
+    )
+
+
+def test_the_envelope_check_does_not_touch_the_parker():
+    """It runs early, before the parker exists, and must stay self-contained."""
+    source = open("cerebel_orchestrator/orchestrator_node.py", encoding="utf-8").read()
+    start = source.index("def _check_mission_envelopes")
+    end = source.index("def ", start + 10)
+    assert "self.parker" not in source[start:end]
