@@ -58,9 +58,13 @@ def _setup(context, *_args, **_kwargs):
 
     mission = _resolve_mission(share, get("mission"))
     params = get("params_file") or os.path.join(share, "params", "orchestrator.yaml")
-    park_poses = get("park_poses_file")
-    if not park_poses and get("enable_park") == "true":
-        park_poses = os.path.join(share, "params", "park_poses.yaml")
+    # Always load the poses. enable_park decides whether the ramp MOVES, not
+    # whether the profiles exist: loading only on enable_park left just the
+    # built-in "travel" fallback, so a `park_arms home` step failed with "no
+    # such profile" partway through a mission instead of being skipped.
+    park_poses = get("park_poses_file") or os.path.join(
+        share, "params", "park_poses.yaml"
+    )
     # check_arms steps need envelopes; default to the shipped file so a mission
     # that uses one does not fail at startup for want of a launch argument.
     envelopes = get("arm_envelopes_file") or os.path.join(

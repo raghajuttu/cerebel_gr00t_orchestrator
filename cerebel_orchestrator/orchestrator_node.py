@@ -335,6 +335,20 @@ class OrchestratorNode(Node):
                 f"arm_envelopes_file (have {sorted(self.envelopes) or 'none'})"
             )
 
+        profiles = {
+            step.profile
+            for step in self.mission.steps
+            if step.kind == "park_arms" and step.profile
+        }
+        unknown = sorted(name for name in profiles if name not in self.parker.poses)
+        if unknown:
+            raise MissionError(
+                f"the mission names park profile(s) {unknown} that are not in "
+                f"park_poses_file (have {sorted(self.parker.poses) or 'none'}). "
+                "A park_arms step must name a real profile even when enable_park "
+                "is false, or the step fails mid-mission instead of being skipped."
+            )
+
     def _print_banner(self) -> None:
         log = self.get_logger()
         log.info(f"=== cerebel orchestrator | mission {self.mission.name} ===")
@@ -818,8 +832,15 @@ class OrchestratorNode(Node):
         self._current = None
         self._monitor = None
         self._route_signal(None)
-        level = self.get_logger().info if ok else self.get_logger().error
-        level(f"<-- {'ok' if ok else 'FAILED'}: {reason}")
+        # Two call sites on purpose. rclpy caches a logger's severity against
+        # the (file, function, line) it was called from, so a single line used
+        # for both info and error raises "Logger severity cannot be changed
+        # between calls" the first time a step fails -- which took down the node
+        # on the first failing step of a mission that had worked until then.
+        if ok:
+            self.get_logger().info(f"<-- ok: {reason}")
+        else:
+            self.get_logger().error(f"<-- FAILED: {reason}")
         self.runner.report(ok, reason)
 
     def _stop_activity(self, why: str) -> None:
