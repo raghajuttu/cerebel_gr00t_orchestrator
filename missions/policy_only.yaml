@@ -11,16 +11,18 @@ frame_id: odom
 stations: {}
 
 policies:
-  pick_cube:
-    task_description: "pick up the green cube and place it in the box"
-    server_host: 127.0.0.1
+  pick_lipstick:
+    task_description: "pick up the lipstick"
+    server_host: 192.168.8.153
     server_port: 5555
-    checkpoint_label: "adibot-green-pick"
+    checkpoint_label: "pick_scan_place"
     params:
       execution_horizon: 16
       prefetch_enable: true
       rtc_enable: false
       enable_limits: false
+      enable_right_arm: true
+      enable_right_gripper: true
 
 steps:
   # `operator: true` hands the decision to you: the phase ends when you call
@@ -28,7 +30,7 @@ steps:
   # or fails on /orchestrator/skip. Use this to watch one attempt closely before
   # trusting an automatic condition.
   - step: run_policy
-    policy: pick_cube
+    policy: pick_lipstick
     until: {timeout_s: 120.0, operator: true}
 
 repeat: 1

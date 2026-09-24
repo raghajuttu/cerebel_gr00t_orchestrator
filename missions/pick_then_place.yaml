@@ -1,0 +1,162 @@
+# Step one of the kit cycle, and nothing else: pick, then place, at one station.
+#
+# The base never moves. This mission exists to prove exactly one thing --
+# **that the orchestrator can switch from one policy to the next without
+# disturbing the arms** -- because everything else in the cycle is that same
+# switch repeated.
+#
+# The shape:
+#
+#   park to the pose the pick episodes start from  ->  the pick policy picks the
+#   object and comes to rest holding it, arm up  ->  the place policy starts
+#   FROM THERE, hands over to the right arm, presents it to the scanner and puts
+#   it in the box.
+#
+# **There is deliberately nothing between the two policies.** No park, no
+# check_arms, no wait. The place policy's first observation has to be the pick
+# policy's last pose, because that is how the episodes were recorded. Anything
+# inserted here changes the pose the place starts from.
+#
+# What holds the arms during the switch: the old client is killed, the new one
+# takes a few seconds to build its limits, subscribe and ping the server, and
+# for those seconds nobody would be publishing. `hold_arms_between_policies`
+# republishes the last COMMANDED pose at 30 Hz until the new client's first
+# chunk lands. See cerebel_orchestrator/arm_hold.py.
+#
+# What must NOT happen during the switch: re-initialising the forward position
+# controller. That resets the arm, and a reset arm has dropped the object. Leave
+# `policy_prepare_cmd` empty -- bring the controller up once, before the
+# mission, and let the orchestrator cycle only the inference client.
+#
+# NUMBERS TO REPLACE BEFORE RUNNING:
+#   * task_description  -- must match the training annotation VERBATIM. Check
+#                          `wc -l <dataset>/meta/tasks.jsonl` first: if that is
+#                          one line, the two strings below are not two
+#                          behaviours and this mission cannot work as written.
+#   * the grasp thresholds in params/orchestrator.yaml, measured off a run log
+#   * the `ready` park pose -- all zeros until you set it
+
+name: pick_then_place
+frame_id: odom
+
+# External sensors that a phase can end on. Everything else the orchestrator
+# checks is proprioception -- it reads /joint_states, so it can only answer
+# questions about the robot. These answer questions about the world.
+#
+# THE SCANNER IS THE BEST COMPLETION SIGNAL IN THIS CELL and it is already
+# there. A barcode read is an unambiguous physical fact: the object was in the
+# right hand, presented the right way, and identified. No joint angle can tell
+# you that. Uncomment it below once you know what the scanner publishes -- if
+# it is a USB keyboard-wedge device rather than a ROS node, a ten-line node
+# that reads it and publishes std_msgs/String is all that stands in the way.
+#
+# `mode: event` latches: a scan is instantaneous and the verdict only looks at
+# 10 Hz, so without latching it would be missed. The code itself is kept and
+# printed in the phase's reason, so a run log says WHICH item was scanned.
+#
+# signals:
+#   scanned:
+#     topic: /barcode/code        # <-- whatever the scanner actually publishes
+#     type: string                # any non-empty value is a read
+#     mode: event
+
+policies:
+  pick_lipstick:
+    task_description: "pick up the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    params: &policy_params
+      execution_horizon: 16
+      prefetch_enable: true
+      # RTC is validated but off here: one new variable at a time, and the new
+      # variable in this mission is the policy switch.
+      rtc_enable: false
+      enable_limits: false
+      # Both arms, both grippers. The place phase is a handover, so the right
+      # arm has to be where the pick episodes left it -- freezing it during the
+      # pick would start the handover from a pose the policy has never seen.
+      enable_right_arm: true
+      enable_right_gripper: true
+
+  place_and_scan:
+    task_description: "scan and place the object"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    params: *policy_params
+
+steps:
+  # Start where the pick episodes started, and with the gripper open -- which is
+  # also what arms the `grasp: closed` condition below. Drop this step if the
+  # arms are already parked there by hand.
+  - {step: park_arms, profile: ready}
+
+  # The pick ends when the left gripper has closed on the object AND the arm has
+  # come to rest. Both, not the first to fire: a grasp registered mid-reach
+  # would end the phase with the arm still swinging, and the place policy would
+  # start from a pose halfway through a motion.
+  # MEASURED, 50 lipstick episodes: p95 duration 19.2 s, so 40 s is a generous
+  # cap rather than a five-minute hang on a failed attempt.
+  #
+  # `settled` is DELIBERATELY ABSENT, and that is a change from the first draft.
+  # The demonstrations do not end with the arm at rest -- recording stops while
+  # it is still moving -- so at motion_eps 0.05 / hold_s 0.5 the condition would
+  # have fired in only 17% of episodes and the other 83% would have run to
+  # their timeout. The left gripper closing on the object is the decisive fact
+  # here, and the place policy is trained to start from a moving arm anyway.
+  - step: run_policy
+    policy: pick_lipstick
+    until: {timeout_s: 40.0, grasp: closed, side: left, hold_s: 0.3}
+    on_fail: abort
+    #
+    # NOT AVAILABLE ON THIS ROBOT: the `effort:` condition reads the side's
+    # finger joint, and in the whole 302-episode dataset both finger joints
+    # report effort 0.0000 at every single sample. The 14 arm joints do carry
+    # effort (up to 9.5 on left joint1), so arm load is measurable -- grip force
+    # is not. Do not add `effort:` here expecting a grasp check; it would never
+    # fire and every pick would run to its timeout.
+
+  # >>> the switch <<<
+  #
+  # Nothing here. The arm is up, holding the object, and that is the place
+  # policy's starting observation.
+
+  # The place ends when the RIGHT gripper opens and the arms settle. It can only
+  # open after it has closed, during the handover -- the monitor's arming rule
+  # is what makes that work, and it is why this condition cannot fire on the
+  # pose the phase starts in.
+  #
+  # `settled` is doing real work here too: the right gripper may open
+  # transiently while the object is presented to the scanner, and an arm still
+  # moving is not a finished place.
+  # MEASURED, 150 place episodes: p95 duration 26.4 s -> 55 s cap.
+  #
+  # `settled` IS kept here, at the measured-viable motion_eps of 0.20 with a
+  # 0.3 s hold (91% of episodes), because this is the last phase and the mission
+  # should not report success with the arms still swinging over the box. If it
+  # times out with "arms never stopped moving", drop it -- do not lower
+  # motion_eps further, that direction is what the numbers rule out.
+  - step: run_policy
+    policy: place_and_scan
+    until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
+    on_fail: abort
+    #
+    # WITH THE SCANNER, this becomes the strongest check in the mission --
+    # add `signal: scanned` to the line above and uncomment the signals block
+    # at the top:
+    #
+    #   until: {timeout_s: 150.0, signal: scanned,
+    #           grasp: open, side: right, settled: true, hold_s: 0.5}
+    #
+    # Read as: the scanner identified the item (so the handover worked and it
+    # was presented correctly) AND the right gripper then released it AND the
+    # arms came to rest. Conditions are ANDed, so the scan is not a shortcut
+    # past the release -- an item that was scanned and then dropped on the
+    # floor still fails.
+
+  # Confirm both hands are empty and the arms are where they should be. This is
+  # the check that says the object went in the box rather than onto the floor.
+  - {step: check_arms, envelope: travel, seconds: 5.0}
+
+repeat: 1
