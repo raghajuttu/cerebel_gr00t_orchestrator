@@ -9,6 +9,13 @@ so the e-stop subscription is always live.
 Nav2 is used **without SLAM and without AMCL**: the global costmap is a rolling
 window and ``map`` is pinned to ``odom`` by a static transform, so goals are
 odometry-relative. See docs/NAVIGATION.md for why, and for what that costs.
+
+**Nav2 is an optional dependency.** A mission made only of ``run_policy``,
+``park_arms`` and ``move_base`` steps never navigates, and on a robot where
+``nav2_msgs`` is not installed it must still run. So the import is guarded and
+this module stays importable either way: without Nav2 the client exists but
+refuses to send, and the orchestrator turns that into a clear startup error --
+but only for a mission that actually has a ``navigate`` step.
 """
 
 from __future__ import annotations
@@ -18,9 +25,22 @@ from typing import Optional, Tuple
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
+
+try:
+    from nav2_msgs.action import NavigateToPose
+
+    NAV2_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on what is installed
+    NavigateToPose = None
+    NAV2_AVAILABLE = False
+
+NAV2_MISSING = (
+    "nav2_msgs is not installed on this machine, so `navigate` steps cannot "
+    "run. Install the Nav2 stack, or use `move_base` steps instead -- see "
+    "docs/NAVIGATION.md, which explains why this chassis cannot use Nav2 yet."
+)
 
 from .mission import Station
 
@@ -49,7 +69,10 @@ class NavClient:
     def __init__(self, node: Node, action_name: str = "navigate_to_pose") -> None:
         self.node = node
         self.action_name = action_name
-        self._client = ActionClient(node, NavigateToPose, action_name)
+        self.available = NAV2_AVAILABLE
+        self._client = (
+            ActionClient(node, NavigateToPose, action_name) if NAV2_AVAILABLE else None
+        )
         self._goal_future = None
         self._result_future = None
         self._goal_handle = None
@@ -61,11 +84,15 @@ class NavClient:
     # -- server availability -------------------------------------------------
 
     def server_ready(self, timeout_s: float = 0.0) -> bool:
+        if self._client is None:
+            return False
         return self._client.wait_for_server(timeout_sec=timeout_s)
 
     # -- one goal ------------------------------------------------------------
 
     def send(self, station: Station, frame_id: str, timeout_s: float) -> None:
+        if self._client is None:
+            raise RuntimeError(NAV2_MISSING)
         if self.busy:
             raise RuntimeError("NavClient.send() while a goal is still in flight")
         goal = NavigateToPose.Goal()

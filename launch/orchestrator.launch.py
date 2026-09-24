@@ -98,14 +98,29 @@ def _setup(context, *_args, **_kwargs):
             )
         )
 
-    nodes = [
-        Node(
-            package=PACKAGE,
-            executable="base_adapter",
-            name="base_adapter",
-            output="screen",
-            parameters=[params],
-        ),
+    # base_adapter is the interlock between a twist source and the wheels. A
+    # mission with no base steps has no twist source, so starting it would put a
+    # node on the graph publishing zeros at a chassis that is not part of this
+    # run. Skip it -- fewer moving parts in the first hardware tests.
+    nodes = []
+    if _mission_moves_the_base(mission):
+        nodes.append(
+            Node(
+                package=PACKAGE,
+                executable="base_adapter",
+                name="base_adapter",
+                output="screen",
+                parameters=[params],
+            )
+        )
+    else:
+        actions.append(
+            LogInfo(
+                msg=f"{os.path.basename(mission)} has no base steps -- not "
+                "starting base_adapter."
+            )
+        )
+    nodes.append(
         Node(
             package=PACKAGE,
             executable="orchestrator",
@@ -113,8 +128,8 @@ def _setup(context, *_args, **_kwargs):
             output="screen",
             emulate_tty=True,
             parameters=[params, overrides],
-        ),
-    ]
+        )
+    )
     if wants_nav2:
         actions.append(
             IncludeLaunchDescription(
@@ -128,6 +143,16 @@ def _setup(context, *_args, **_kwargs):
             )
         )
     return actions + nodes
+
+
+def _mission_moves_the_base(path: str) -> bool:
+    """Does this mission drive the base at all, by either mechanism?"""
+    try:
+        from cerebel_orchestrator.mission import BASE_STEP_KINDS, Mission
+
+        return any(step.kind in BASE_STEP_KINDS for step in Mission.load(path).steps)
+    except Exception:
+        return True
 
 
 def _mission_navigates(path: str) -> bool:

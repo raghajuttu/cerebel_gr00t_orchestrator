@@ -46,7 +46,7 @@ from .base_move import BaseMoveConfig, BaseMover
 from .envelopes import load_envelopes
 from .joints import reorder_by_name
 from .mission import Mission, MissionError, navigate_safety_warnings
-from .nav_client import NavClient
+from .nav_client import NAV2_MISSING, NavClient
 from .phase_monitor import MonitorConfig, PhaseMonitor
 from .policy_preflight import failures, preflight, summary
 from .signal_source import SignalSource
@@ -373,6 +373,9 @@ class OrchestratorNode(Node):
             return
         if not self._nav_ready and self._needs_nav():
             wait = float(self.get_parameter("nav_server_wait_s").value)
+            if not self.nav.available:
+                self.runner.fault(NAV2_MISSING)
+                return
             self._nav_ready = self.nav.server_ready(wait)
             if not self._nav_ready:
                 self.runner.fault(
