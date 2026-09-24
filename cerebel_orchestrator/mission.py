@@ -314,6 +314,9 @@ class Until:
     effort: Optional[float] = None
     # The name of an external signal that must have fired. See `Signal`.
     signal: Optional[str] = None
+    # A stricter stillness than the robot's default, for one step. How far any
+    # arm joint may travel within the hold window and still count as parked.
+    still_spread: Optional[float] = None
     # The name of a joint envelope the arms must be inside. This is the
     # condition for a phase that ends at a POSE rather than at an event -- a
     # pick finishes with the object lifted clear of the tote, and no gripper
@@ -330,6 +333,7 @@ class Until:
             "grasp",
             "side",
             "settled",
+            "still_spread",
             "effort",
             "signal",
             "envelope",
@@ -359,6 +363,15 @@ class Until:
                 side is not None,
                 where,
                 "effort needs side: left or right -- it reads one finger joint",
+            )
+        still_spread = raw.get("still_spread")
+        if still_spread is not None:
+            still_spread = _as_float(still_spread, where, "still_spread")
+            _require(still_spread > 0, where, "still_spread must be positive (radians)")
+            _require(
+                bool(raw.get("settled", False)),
+                where,
+                "still_spread tightens the `settled` check, so settled must be set",
             )
         envelope = raw.get("envelope")
         if envelope is not None:
@@ -399,6 +412,7 @@ class Until:
             grasp=grasp,
             side=side,
             settled=bool(raw.get("settled", False)),
+            still_spread=still_spread,
             effort=effort,
             signal=signal,
             envelope=envelope,

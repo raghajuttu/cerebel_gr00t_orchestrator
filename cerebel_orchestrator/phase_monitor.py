@@ -14,10 +14,25 @@ The conditions, all optional except the first, **combined with AND**:
 ``grasp: closed|open`` on ``side``
     the finger joint crosses its threshold and stays there for ``hold_s``.
 ``settled``
-    no *arm* joint moves faster than ``motion_eps`` rad/s for ``hold_s``. The
-    fingers are excluded deliberately -- a gripper still closing is not an arm
-    still moving, and the two are not even in the same units (radians against
-    metres).
+    no *arm* joint has MOVED more than ``still_spread_rad`` over the last
+    ``hold_s`` seconds. A position spread, not a speed -- and that distinction
+    is load-bearing.
+
+    This was a speed threshold and it was wrong. Teleoperated demonstrations
+    jitter: a parked arm wobbles a hundredth of a radian between frames, which
+    at 30 fps reads as 0.3 rad/s, well above any threshold loose enough to be
+    useful. So the check fired on a momentary dip during the return motion
+    rather than at the stop. Measured against all 150 place episodes, it ended
+    the phase a median 1.9 s early -- p95 7.5 s -- in 75 of 88 episodes that
+    reach a rest. The arm stopped mid-return on hardware, which is how this was
+    found.
+
+    A spread over a window cannot be fooled that way: jitter has a small
+    spread however fast it looks. Same measurement, position-based: median
+    0.024 rad from the pose the arm actually rests at, against 0.143 before.
+
+    The fingers are excluded either way -- a gripper still closing is not an arm
+    still moving, and the two are not even in the same units.
 ``effort``
     the side's finger joint is pushing with at least this much |effort|, held
     for ``hold_s``. This is the better half of the grasp question: a gripper
@@ -82,8 +97,9 @@ call, for tests and for callers with only one loop.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Deque, List, Optional, Sequence, Tuple
 
 from .joints import ARM_SLICE, GRIPPER_INDEX
 from .mission import Until
@@ -110,8 +126,15 @@ class MonitorConfig:
 
     grasp_close_m: float = 0.010
     grasp_open_m: float = 0.030
-    # A joint SPEED, rad/s -- not a per-tick delta. See the module docstring.
-    motion_eps: float = 0.05
+    # A joint SPEED, rad/s. Used ONLY to arm the settled condition -- "has this
+    # arm moved at all yet" -- where a jitter spike answering yes does no harm.
+    # It no longer decides stillness; see still_spread_rad.
+    motion_eps: float = 0.20
+    # How far any arm joint may travel within the hold window and still count as
+    # parked, in radians. MEASURED against 150 place episodes: at 0.04 over a
+    # 1.0 s window the phase ends a median 0.024 rad from the pose the arm
+    # actually rests at, against 0.143 for the speed threshold it replaced.
+    still_spread_rad: float = 0.04
     settle_grace_s: float = 3.0
     stale_state_s: float = 1.0
     # The staleness check is suppressed for this long after a phase starts. A
@@ -127,6 +150,8 @@ class MonitorConfig:
             )
         if self.motion_eps <= 0:
             raise ValueError("motion_eps must be positive")
+        if self.still_spread_rad <= 0:
+            raise ValueError("still_spread_rad must be positive")
         if self.settle_grace_s < 0 or self.stale_state_s <= 0:
             raise ValueError("settle_grace_s must be >= 0 and stale_state_s > 0")
         if self.stale_grace_s < 0:
@@ -170,12 +195,20 @@ class PhaseMonitor:
         # condition can never pass, which the timeout reason says out loud.
         self.envelope = envelope
         self._envelope_since: Optional[float] = None
+        # A step may demand a stricter stillness than the robot's default.
+        self._still_spread = (
+            until.still_spread
+            if until.still_spread is not None
+            else config.still_spread_rad
+        )
         self._last_positions: Optional[List[float]] = None
         self._last_state_time: Optional[float] = None
+        # Recent arm poses, for the stillness spread. Trimmed to the hold
+        # window, so it stays small whatever rate the robot publishes at.
+        self._history: Deque[Tuple[float, List[float]]] = deque()
         self._grasp_armed = False
         self._grasp_since: Optional[float] = None
         self._motion_seen = False
-        self._still_since: Optional[float] = None
         self._operator_advanced = False
         self._operator_aborted = False
         self._last_efforts: Optional[List[float]] = None
@@ -320,6 +353,18 @@ class PhaseMonitor:
         previous, last_time = self._last_positions, self._last_state_time
         self._last_positions = positions
         self._last_state_time = now
+
+        # Stillness is a spread over a window, so keep exactly that window:
+        # samples within hold_s of now. Trimming wider would measure over a
+        # longer period than the step asked for, and the phase would end late.
+        self._history.append((now, [positions[i] for i in ARM_INDICES]))
+        # Keep exactly one sample at or before the window's edge, so the
+        # window is bracketed rather than clipped. Dropping everything older
+        # than the edge would, at a sparse or irregular sample rate, leave only
+        # the last few samples and call a window full that is mostly unmeasured.
+        horizon = now - self.until.hold_s
+        while len(self._history) > 1 and self._history[1][0] <= horizon:
+            self._history.popleft()
         if previous is None or last_time is None:
             return
         dt = now - last_time
@@ -330,11 +375,12 @@ class PhaseMonitor:
         speed = (
             max(abs(positions[index] - previous[index]) for index in ARM_INDICES) / dt
         )
+        # Arming only: has this arm moved at all yet? A jitter spike answering
+        # yes does no harm -- the question is whether the phase has started
+        # doing anything, not whether it has stopped. Stillness itself is a
+        # position spread; see _settled_met.
         if speed > self.config.motion_eps:
             self._motion_seen = True
-            self._still_since = None
-        elif self._still_since is None:
-            self._still_since = now
 
     def _finger(self) -> Optional[float]:
         if self._last_positions is None or self.until.side is None:
@@ -371,14 +417,38 @@ class PhaseMonitor:
         return None
 
     def _settled_met(self, now: float, elapsed: float) -> Optional[str]:
-        """The reason the settle condition is satisfied, or None."""
+        """The reason the settle condition is satisfied, or None.
+
+        The test is a position SPREAD over the hold window: how far has the
+        worst arm joint travelled in the last ``hold_s`` seconds? Teleop jitter
+        has a tiny spread however fast it looks, so this distinguishes a parked
+        arm from a slowly moving one, which a speed threshold cannot.
+        """
         if not self._motion_seen or elapsed < self.config.settle_grace_s:
             return None
-        if self._still_since is None:
+        if not self._history:
             return None
-        if now - self._still_since >= self.until.hold_s:
-            return f"arms settled for {self.until.hold_s:.1f}s at {elapsed:.1f}s"
-        return None
+        # The window must be substantially full, or a phase could pass on two
+        # samples taken a millisecond apart. Three quarters allows for the
+        # sensor's own period at slow rates without letting a sliver through.
+        if now - self._history[0][0] < 0.75 * self.until.hold_s:
+            return None
+        spread = self._spread()
+        if spread is None or spread > self._still_spread:
+            return None
+        return (
+            f"arms settled (moved {spread:.3f} rad in "
+            f"{self.until.hold_s:.1f}s) at {elapsed:.1f}s"
+        )
+
+    def _spread(self) -> Optional[float]:
+        """The furthest any one arm joint travelled across the window."""
+        if len(self._history) < 2:
+            return None
+        poses = [pose for _, pose in self._history]
+        return max(
+            max(values) - min(values) for values in zip(*poses)
+        )
 
     def _effort_met(self, now: float, elapsed: float) -> Optional[str]:
         """The reason the effort condition is satisfied, or None.
@@ -446,10 +516,16 @@ class PhaseMonitor:
         if self.until.settled:
             if not self._motion_seen:
                 bits.append("settled never armed -- the arms never moved")
-            elif self._still_since is None:
-                bits.append("arms never stopped moving")
             else:
-                bits.append("arms stopped, but not for long enough")
+                spread = self._spread()
+                if spread is None:
+                    bits.append("settled: not enough joint_states to measure")
+                else:
+                    bits.append(
+                        f"arms moved {spread:.3f} rad in the last "
+                        f"{self.until.hold_s:.1f}s, wanted under "
+                        f"{self._still_spread:.3f}"
+                    )
         if self.until.effort is not None:
             if self._last_efforts is None:
                 bits.append(

@@ -77,15 +77,37 @@ policies:
     server_port: 5555
     checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
     params: &policy_params
-      execution_horizon: 16
+      # THE VALIDATED RTC CONFIGURATION, sized from the 15-run scan_40_chunk
+      # latency set in adibot_gr00t_client docs/VALIDATION.md (round trip p50
+      # 239 ms / p95 273 / p99 343; in-flight skip p99 9 steps). Chunk length H
+      # is 40, and the invariants are frozen <= overlap <= prefetch_lead and
+      # execution_horizon <= H - overlap.
+      #
+      # THE EARLIER SETTINGS HERE WERE THE WORST CASE FOR SMOOTHNESS. With
+      # prefetch on and RTC off, their own A/B measured the seam at 72.1 mrad
+      # against 47.7 for blocking -- prefetch removes the PAUSE and worsens the
+      # JUMP, because each chunk is planned from scratch and disagrees with the
+      # one before it at their shared instants. And execution_horizon 16 re-plans
+      # every 0.53 s instead of 0.87 s, so there were more seams as well. Roughly
+      # two 4-degree snaps a second, which is what jitter looks like.
+      #
+      # RTC is what removes the jump: the new chunk is grown out of the old
+      # one's tail, and the first rtc_frozen_steps are held identical to it.
+      execution_horizon: 26
       prefetch_enable: true
-      # RTC is validated but off here: one new variable at a time, and the new
-      # variable in this mission is the policy switch.
-      rtc_enable: false
+      rtc_enable: true
+      prefetch_lead: 16
+      rtc_overlap_steps: 14
+      rtc_frozen_steps: 10
+      rtc_ramp_rate: 5.0
+      #
+      # NEEDS THE SERVER PATCH. Without server/gr00t_policy.py v3 on the GPU box
+      # RTC is silently inert and the client says so at startup -- check the
+      # banner. And watch rtc_frozen_overrun in the run sidecar: the D run saw
+      # warnings there, because frozen 10 had only a one-step margin over the
+      # measured p99 skip of 9. If it climbs, go to frozen 12 / overlap 16 /
+      # prefetch_lead 18, which is the doc's own next step.
       enable_limits: false
-      # Both arms, both grippers. The place phase is a handover, so the right
-      # arm has to be where the pick episodes left it -- freezing it during the
-      # pick would start the handover from a pose the policy has never seen.
       enable_right_arm: true
       enable_right_gripper: true
 
@@ -149,15 +171,27 @@ steps:
   # moving is not a finished place.
   # MEASURED, 150 place episodes: p95 duration 26.4 s -> 55 s cap.
   #
-  # THIS condition is a good one, unlike the pick's. Replayed against all 150
-  # place episodes it fires in 148 of them, at median 84.5% and p95 96.5% of the
-  # episode -- i.e. near the end, where it should. The arming rule is what makes
-  # it work: `grasp: open` on the right cannot fire until the right gripper has
-  # been seen CLOSED, which only happens at the handover.
+  # `settled` HERE IS A POSITION SPREAD, NOT A SPEED, and that matters.
+  #
+  # The arms DO come to rest after a place: 88 of 150 episodes settle at median
+  # 93% of the episode and hold about 1.5 s. But teleop jitter wobbles a parked
+  # arm a hundredth of a radian between frames, which at 30 fps reads as
+  # 0.3 rad/s -- so a speed threshold fired on a dip during the return rather
+  # than at the stop. Measured: it ended the phase a median 1.9 s early, p95
+  # 7.5 s, in 75 of the 88 episodes that reach a rest. On hardware that looked
+  # like the arm stopping midway, which is how it was found.
+  #
+  # still_spread 0.04 over a 1.0 s window ends the phase a median 0.024 rad
+  # from the pose the arm actually rests at, against 0.143 before.
+  #
+  # `on_fail: continue` because the tighter condition fires in fewer episodes
+  # (73/150 in replay) and the park step below is the backstop: a timeout here
+  # means the arms are parked deliberately instead, not that the run failed.
   - step: run_policy
     policy: place_and_scan
-    until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
-    on_fail: abort
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            settled: true, still_spread: 0.04, hold_s: 1.0}
+    on_fail: continue
     #
     # WITH THE SCANNER, this becomes the strongest check in the mission --
     # add `signal: scanned` to the line above and uncomment the signals block

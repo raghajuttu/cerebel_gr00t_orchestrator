@@ -78,14 +78,19 @@ def test_a_moving_arm_is_never_called_settled_at_any_sensor_rate(sensor_hz):
 
     At 100 Hz an arm moving 0.5 rad/s covers 0.005 rad per sample. Against a
     per-tick-delta threshold of 0.05 that reads as stationary, and the phase
-    would end with the arm in motion. Against a speed it reads as 0.5 rad/s.
+    would end with the arm in motion. Against a position spread over the hold
+    window it covers 0.25 rad, which is nothing like still at any rate.
     """
     until = Until(timeout_s=6.0, settled=True, hold_s=0.5)
     at, verdict = run(sensor_hz, 10.0, move_for_s=7.0, then_hold_s=0.0, until=until)
     # The only thing that ends this phase is the clock -- never the settle check.
     assert at == pytest.approx(6.0, abs=0.2)
     assert verdict.done and not verdict.ok
-    assert "never stopped moving" in verdict.reason
+    # The reason now reports the measured spread, which is more useful than
+    # "never stopped moving": it says how far the arm travelled and what was
+    # wanted, so a threshold can be set from one failed run.
+    assert "wanted under" in verdict.reason
+    assert "rad in the last" in verdict.reason
 
 
 def test_observing_without_deciding_changes_nothing():
