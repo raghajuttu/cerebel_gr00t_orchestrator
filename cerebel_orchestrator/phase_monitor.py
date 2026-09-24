@@ -18,6 +18,18 @@ The conditions, all optional except the first, **combined with AND**:
     fingers are excluded deliberately -- a gripper still closing is not an arm
     still moving, and the two are not even in the same units (radians against
     metres).
+``effort``
+    the side's finger joint is pushing with at least this much |effort|, held
+    for ``hold_s``. This is the better half of the grasp question: a gripper
+    whose entire travel is five centimetres gives a few millimetres of position
+    signal between "holding a lipstick" and "closed on air", but the whole grip
+    force in effort. Where the driver publishes effort, prefer it.
+``signal``
+    an external sensor fired -- the barcode scanner returned a code, a beam
+    broke, a load cell saw the weight arrive. Everything else here is
+    proprioception and can only answer questions about the robot; this is the
+    only condition that can answer a question about the world. Fed by
+    ``observe_signal`` from whatever subscribes to it.
 
 ``grasp`` and ``settled`` together are the pick-and-carry check: the object is
 held *and* the arm has come to rest in its carry pose. That conjunction is what
@@ -32,6 +44,11 @@ two:
 
 * ``grasp`` arms on seeing the opposite state -- a pick that must end closed has
   to have been open, so the check cannot pass on the starting pose.
+* ``effort`` needs no arming: an idle gripper reads near zero, so the condition
+  starts false by itself.
+* ``signal`` arms according to its own declaration -- an ``event`` signal starts
+  unfired and needs nothing, a ``level`` signal must be seen false first unless
+  the mission says otherwise.
 * ``settled`` arms on seeing motion, and additionally never before
   ``settle_grace_s`` has elapsed, so a slow-to-start policy is not mistaken for
   a finished one.
@@ -137,6 +154,12 @@ class PhaseMonitor:
         self._still_since: Optional[float] = None
         self._operator_advanced = False
         self._operator_aborted = False
+        self._last_efforts: Optional[List[float]] = None
+        self._effort_since: Optional[float] = None
+        self._signal_armed = False
+        self._signal_level = False
+        self._signal_fired = False
+        self._signal_detail = ""
 
     # -- external pokes -----------------------------------------------------
 
@@ -159,6 +182,46 @@ class PhaseMonitor:
         if len(positions) != 16:
             raise ValueError(f"expected 16 canonical joints, got {len(positions)}")
         self._observe(now, [float(value) for value in positions])
+
+    def observe_effort(self, efforts: Optional[Sequence[float]]) -> None:
+        """Fold in the effort field of one ``/joint_states`` sample.
+
+        Optional: many drivers publish an empty effort array, and a mission that
+        does not ask for an effort condition never needs it. An empty or
+        wrong-length array is ignored rather than raising, because it is a
+        property of the driver rather than a mistake in the mission.
+        """
+        if not efforts or len(efforts) != 16:
+            return
+        self._last_efforts = [float(value) for value in efforts]
+
+    def observe_signal(self, fired: bool, detail: str = "") -> None:
+        """Fold in one reading of the external signal. Decides nothing.
+
+        ``fired`` is the reading as the signal's own rules define it -- a
+        non-empty string, a true Bool, a float past its threshold. The arming
+        and the latching live here so that every condition in this module
+        behaves the same way, whatever produced the reading.
+        """
+        self._signal_level = bool(fired)
+        if detail:
+            self._signal_detail = detail
+        if not self._signal_armed:
+            # An unarmed signal arms by being false once. An `event` signal is
+            # armed at construction, so this only applies to `level`.
+            if not fired:
+                self._signal_armed = True
+            return
+        if fired:
+            self._signal_fired = True
+
+    def arm_signal_now(self) -> None:
+        """Declare the signal armed without waiting to see it false.
+
+        Used for ``event`` signals, which start unfired by definition, and for
+        ``level`` signals whose mission sets ``arm: false``.
+        """
+        self._signal_armed = True
 
     def verdict(self, now: float) -> Verdict:
         """Is this phase over? Call from the loop that switches steps."""
@@ -191,6 +254,16 @@ class PhaseMonitor:
         if self.until.settled:
             wanted += 1
             reason = self._settled_met(now, elapsed)
+            if reason is not None:
+                met.append(reason)
+        if self.until.effort is not None:
+            wanted += 1
+            reason = self._effort_met(now, elapsed)
+            if reason is not None:
+                met.append(reason)
+        if self.until.signal is not None:
+            wanted += 1
+            reason = self._signal_met(elapsed)
             if reason is not None:
                 met.append(reason)
 
@@ -278,6 +351,41 @@ class PhaseMonitor:
             return f"arms settled for {self.until.hold_s:.1f}s at {elapsed:.1f}s"
         return None
 
+    def _effort_met(self, now: float, elapsed: float) -> Optional[str]:
+        """The reason the effort condition is satisfied, or None.
+
+        No arming: an idle finger joint reads near zero, so this starts false.
+        The magnitude is taken because sign is a driver convention and a grip is
+        a grip whichever way the joint is being pushed.
+        """
+        if self._last_efforts is None or self.until.side is None:
+            return None
+        effort = abs(self._last_efforts[GRIPPER_INDEX[self.until.side]])
+        if effort < self.until.effort:
+            self._effort_since = None
+            return None
+        if self._effort_since is None:
+            self._effort_since = now
+        if now - self._effort_since >= self.until.hold_s:
+            return (
+                f"{self.until.side} gripper loaded ({effort:.2f} >= "
+                f"{self.until.effort:.2f}) held {self.until.hold_s:.1f}s at {elapsed:.1f}s"
+            )
+        return None
+
+    def _signal_met(self, elapsed: float) -> Optional[str]:
+        """The reason the external signal is satisfied, or None.
+
+        No ``hold_s`` here on purpose. A barcode read is instantaneous and a
+        beam break can be brief; requiring either to persist would be requiring
+        the wrong thing. Latching is what makes a short event survive until the
+        verdict looks.
+        """
+        if not self._signal_fired:
+            return None
+        detail = f" ({self._signal_detail})" if self._signal_detail else ""
+        return f"signal {self.until.signal!r} fired{detail} at {elapsed:.1f}s"
+
     def _unmet(self) -> str:
         """Why the early conditions did not fire -- the useful half of a timeout."""
         bits: List[str] = []
@@ -293,6 +401,29 @@ class PhaseMonitor:
                 bits.append("arms never stopped moving")
             else:
                 bits.append("arms stopped, but not for long enough")
+        if self.until.effort is not None:
+            if self._last_efforts is None:
+                bits.append(
+                    f"effort >= {self.until.effort:.2f} never checked -- "
+                    "/joint_states carried no effort field"
+                )
+            else:
+                reading = abs(self._last_efforts[GRIPPER_INDEX[self.until.side]])
+                bits.append(
+                    f"effort {self.until.side} at {reading:.2f}, wanted "
+                    f">= {self.until.effort:.2f}"
+                )
+        if self.until.signal is not None:
+            if not self._signal_armed:
+                bits.append(
+                    f"signal {self.until.signal!r} never armed -- it was true "
+                    "from the start and never went false"
+                )
+            else:
+                bits.append(
+                    f"signal {self.until.signal!r} never fired "
+                    f"(last reading {'true' if self._signal_level else 'false'})"
+                )
         if self.until.operator:
             bits.append("no operator advance")
         return "; ".join(bits) or "no early condition set"
