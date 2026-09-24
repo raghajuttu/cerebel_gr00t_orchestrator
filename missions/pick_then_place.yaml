@@ -104,30 +104,44 @@ steps:
   # Put `- {step: park_arms, profile: ready}` back, and set enable_park: true,
   # once the switch itself is proven and you want the arms placed repeatably.
 
-  # The pick ends when the left gripper has closed on the object AND the arm has
-  # come to rest. Both, not the first to fire: a grasp registered mid-reach
-  # would end the phase with the arm still swinging, and the place policy would
-  # start from a pose halfway through a motion.
-  # MEASURED, 50 lipstick episodes: p95 duration 19.2 s, so 40 s is a generous
-  # cap rather than a five-minute hang on a failed attempt.
+  # HOW THIS PHASE ENDS: after 20 seconds. Not on a sensor -- read on.
   #
-  # `settled` is DELIBERATELY ABSENT, and that is a change from the first draft.
-  # The demonstrations do not end with the arm at rest -- recording stops while
-  # it is still moving -- so at motion_eps 0.05 / hold_s 0.5 the condition would
-  # have fired in only 17% of episodes and the other 83% would have run to
-  # their timeout. The left gripper closing on the object is the decisive fact
-  # here, and the place policy is trained to start from a moving arm anyway.
+  # With no early condition, `timeout_s` is the phase's INTENDED end and counts
+  # as success (Until.timeout_is_success). That is deliberate here.
+  #
+  # The obvious condition is `grasp: closed, side: left`. Replayed against all
+  # 152 pick episodes it fires in every one -- but at 44% of a lipstick episode
+  # and 69% of an oil or tissue one. The gripper closes on the object while the
+  # arm is still down in the tote, and the whole second half of the
+  # demonstration, the lift and the retract, comes after. Ending there would
+  # hand the place policy an arm halfway through a pick.
+  #
+  # Adding `settled` does not rescue it: median 70%, because the arm pauses for
+  # a moment during the lift and that reads as settled.
+  #
+  # So there is no proprioceptive signal in this data that says "the pick is
+  # finished" -- the episode ends when the demonstrator stopped recording. A
+  # fixed duration matched to the demonstrations is the honest choice.
+  #
+  # MEASURED, 50 lipstick episodes: 12.9s shortest, 16.5s median, 19.3s p95,
+  # 20.8s longest. 20 s covers all but the very slowest.
+  #
+  # This is a first-run compromise, not the end state. The real fix is a
+  # completion signal the arm cannot fake -- see the scanner note below, or
+  # re-segment the data so a pick episode ends where the pick ends.
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 40.0, grasp: closed, side: left, hold_s: 0.3}
+    until: {timeout_s: 20.0}
     on_fail: abort
-    #
-    # NOT AVAILABLE ON THIS ROBOT: the `effort:` condition reads the side's
-    # finger joint, and in the whole 302-episode dataset both finger joints
-    # report effort 0.0000 at every single sample. The 14 arm joints do carry
-    # effort (up to 9.5 on left joint1), so arm load is measurable -- grip force
-    # is not. Do not add `effort:` here expecting a grasp check; it would never
-    # fire and every pick would run to its timeout.
+
+  # Did the pick actually work? The carry envelope's left-finger bound is
+  # [0.006, 0.016] -- measured from the final frame of real picks -- so this
+  # answers "is the object still in the gripper" without moving anything.
+  #
+  # `on_fail: continue` on purpose for the first run: it REPORTS a failed grasp
+  # but does not stop the mission, because the point of this run is to watch the
+  # switch happen. Change it to `abort` once the switch is proven.
+  - {step: check_arms, envelope: carry, seconds: 3.0, on_fail: continue}
 
   # >>> the switch <<<
   #
@@ -144,11 +158,11 @@ steps:
   # moving is not a finished place.
   # MEASURED, 150 place episodes: p95 duration 26.4 s -> 55 s cap.
   #
-  # `settled` IS kept here, at the measured-viable motion_eps of 0.20 with a
-  # 0.3 s hold (91% of episodes), because this is the last phase and the mission
-  # should not report success with the arms still swinging over the box. If it
-  # times out with "arms never stopped moving", drop it -- do not lower
-  # motion_eps further, that direction is what the numbers rule out.
+  # THIS condition is a good one, unlike the pick's. Replayed against all 150
+  # place episodes it fires in 148 of them, at median 84.5% and p95 96.5% of the
+  # episode -- i.e. near the end, where it should. The arming rule is what makes
+  # it work: `grasp: open` on the right cannot fire until the right gripper has
+  # been seen CLOSED, which only happens at the handover.
   - step: run_policy
     policy: place_and_scan
     until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
