@@ -24,6 +24,15 @@ The conditions, all optional except the first, **combined with AND**:
     whose entire travel is five centimetres gives a few millimetres of position
     signal between "holding a lipstick" and "closed on air", but the whole grip
     force in effort. Where the driver publishes effort, prefer it.
+``envelope``
+    every constrained joint is inside a named envelope, held for ``hold_s``.
+    This is how a phase that ends at a POSE ends. A pick finishes with the
+    object lifted clear of the tote, and neither the gripper nor a motion
+    threshold says that -- the gripper closes at 44% of a lipstick episode,
+    while the arm is still down in the tote, and the arm pauses mid-lift often
+    enough that ``settled`` fires at 70%. The joint angles do say it: replayed
+    against all 152 pick episodes, gripper-closed AND inside the carry envelope
+    fires in 151 of them, at 88% of the episode.
 ``signal``
     an external sensor fired -- the barcode scanner returned a code, a beam
     broke, a load cell saw the weight arrive. Everything else here is
@@ -46,6 +55,9 @@ two:
   to have been open, so the check cannot pass on the starting pose.
 * ``effort`` needs no arming: an idle gripper reads near zero, so the condition
   starts false by itself.
+* ``envelope`` needs no arming either -- an envelope taken from where a phase
+  ENDS does not contain the pose it starts from, which is the same protection
+  arming provides, built into the bounds instead of the logic.
 * ``signal`` arms according to its own declaration -- an ``event`` signal starts
   unfired and needs nothing, a ``level`` signal must be seen false first unless
   the mission says otherwise.
@@ -141,11 +153,23 @@ class PhaseMonitor:
     the ROS clock, the tests pass integers.
     """
 
-    def __init__(self, until: Until, config: MonitorConfig, start_time: float) -> None:
+    def __init__(
+        self,
+        until: Until,
+        config: MonitorConfig,
+        start_time: float,
+        envelope=None,
+    ) -> None:
         config.validate()
         self.until = until
         self.config = config
         self.start_time = start_time
+        # Resolved by the caller from the envelopes file, because the monitor
+        # has no business reading files. None when the step asked for no
+        # envelope -- and if the step DID ask and this is still None, the
+        # condition can never pass, which the timeout reason says out loud.
+        self.envelope = envelope
+        self._envelope_since: Optional[float] = None
         self._last_positions: Optional[List[float]] = None
         self._last_state_time: Optional[float] = None
         self._grasp_armed = False
@@ -266,6 +290,11 @@ class PhaseMonitor:
             reason = self._signal_met(elapsed)
             if reason is not None:
                 met.append(reason)
+        if self.until.envelope is not None:
+            wanted += 1
+            reason = self._envelope_met(now, elapsed)
+            if reason is not None:
+                met.append(reason)
 
         if wanted and len(met) == wanted:
             return Verdict(True, True, " and ".join(met))
@@ -373,6 +402,26 @@ class PhaseMonitor:
             )
         return None
 
+    def _envelope_met(self, now: float, elapsed: float) -> Optional[str]:
+        """The reason the envelope condition is satisfied, or None.
+
+        Leaving the envelope resets the hold, so an arm that passes through the
+        carry region on its way somewhere else does not end the phase.
+        """
+        if self.envelope is None or self._last_positions is None:
+            return None
+        if self.envelope.check(self._last_positions) is not None:
+            self._envelope_since = None
+            return None
+        if self._envelope_since is None:
+            self._envelope_since = now
+        if now - self._envelope_since >= self.until.hold_s:
+            return (
+                f"arms inside envelope {self.until.envelope!r} for "
+                f"{self.until.hold_s:.1f}s at {elapsed:.1f}s"
+            )
+        return None
+
     def _signal_met(self, elapsed: float) -> Optional[str]:
         """The reason the external signal is satisfied, or None.
 
@@ -424,6 +473,17 @@ class PhaseMonitor:
                     f"signal {self.until.signal!r} never fired "
                     f"(last reading {'true' if self._signal_level else 'false'})"
                 )
+        if self.until.envelope is not None:
+            if self.envelope is None:
+                bits.append(
+                    f"envelope {self.until.envelope!r} was never resolved -- "
+                    "it is not in arm_envelopes_file"
+                )
+            elif self._last_positions is None:
+                bits.append(f"envelope {self.until.envelope!r}: no joint_states")
+            else:
+                why = self.envelope.check(self._last_positions)
+                bits.append(why or f"envelope {self.until.envelope!r} held too briefly")
         if self.until.operator:
             bits.append("no operator advance")
         return "; ".join(bits) or "no early condition set"

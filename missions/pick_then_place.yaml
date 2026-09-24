@@ -104,44 +104,35 @@ steps:
   # Put `- {step: park_arms, profile: ready}` back, and set enable_park: true,
   # once the switch itself is proven and you want the arms placed repeatably.
 
-  # HOW THIS PHASE ENDS: after 20 seconds. Not on a sensor -- read on.
+  # HOW THIS PHASE ENDS: the object is held AND the arm has lifted it clear.
   #
-  # With no early condition, `timeout_s` is the phase's INTENDED end and counts
-  # as success (Until.timeout_is_success). That is deliberate here.
+  #   grasp: closed   the left finger is below 0.025 m -- it closed on something
+  #   envelope: carry every constrained joint is inside the pose a real pick
+  #                   ENDS in, measured as p2..p98 of the final frame of all
+  #                   152 pick episodes
   #
-  # The obvious condition is `grasp: closed, side: left`. Replayed against all
-  # 152 pick episodes it fires in every one -- but at 44% of a lipstick episode
-  # and 69% of an oil or tissue one. The gripper closes on the object while the
-  # arm is still down in the tote, and the whole second half of the
-  # demonstration, the lift and the retract, comes after. Ending there would
-  # hand the place policy an arm halfway through a pick.
+  # ANDed, so both must hold at the same time, for 0.5 s.
   #
-  # Adding `settled` does not rescue it: median 70%, because the arm pauses for
-  # a moment during the lift and that reads as settled.
+  # Why the gripper alone is not enough: replayed against all 152 pick
+  # episodes, `grasp: closed` fires in every one -- but at 44% of a lipstick
+  # episode and 69% of an oil or tissue one. The gripper closes while the arm
+  # is still down in the tote; the lift and retract are the whole second half.
+  # Ending there would hand the place policy an arm halfway through a pick.
   #
-  # So there is no proprioceptive signal in this data that says "the pick is
-  # finished" -- the episode ends when the demonstrator stopped recording. A
-  # fixed duration matched to the demonstrations is the honest choice.
+  # Why `settled` is not the answer either: median 70%, because the arm pauses
+  # for a moment during the lift and that reads as stopped.
   #
-  # MEASURED, 50 lipstick episodes: 12.9s shortest, 16.5s median, 19.3s p95,
-  # 20.8s longest. 20 s covers all but the very slowest.
+  # The pose is what actually distinguishes a finished pick, and it needs no
+  # arming rule -- an envelope taken from where the phase ENDS does not contain
+  # the pose it starts from. Replayed with both conditions: fires in 151 of 152
+  # episodes, at median 88% of the episode.
   #
-  # This is a first-run compromise, not the end state. The real fix is a
-  # completion signal the arm cannot fake -- see the scanner note below, or
-  # re-segment the data so a pick episode ends where the pick ends.
+  # The 30 s timeout is a backstop, not the intended end. Hitting it is a
+  # FAILURE, and the reason names which joint was out of envelope.
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 20.0}
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
     on_fail: abort
-
-  # Did the pick actually work? The carry envelope's left-finger bound is
-  # [0.006, 0.016] -- measured from the final frame of real picks -- so this
-  # answers "is the object still in the gripper" without moving anything.
-  #
-  # `on_fail: continue` on purpose for the first run: it REPORTS a failed grasp
-  # but does not stop the mission, because the point of this run is to watch the
-  # switch happen. Change it to `abort` once the switch is proven.
-  - {step: check_arms, envelope: carry, seconds: 3.0, on_fail: continue}
 
   # >>> the switch <<<
   #

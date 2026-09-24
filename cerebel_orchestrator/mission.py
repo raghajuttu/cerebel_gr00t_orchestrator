@@ -314,6 +314,11 @@ class Until:
     effort: Optional[float] = None
     # The name of an external signal that must have fired. See `Signal`.
     signal: Optional[str] = None
+    # The name of a joint envelope the arms must be inside. This is the
+    # condition for a phase that ends at a POSE rather than at an event -- a
+    # pick finishes with the object lifted clear of the tote, and no gripper
+    # reading or motion threshold says that, but the joint angles do.
+    envelope: Optional[str] = None
     operator: bool = False
     hold_s: float = 0.5
 
@@ -327,6 +332,7 @@ class Until:
             "settled",
             "effort",
             "signal",
+            "envelope",
             "operator",
             "hold_s",
         }
@@ -354,6 +360,13 @@ class Until:
                 where,
                 "effort needs side: left or right -- it reads one finger joint",
             )
+        envelope = raw.get("envelope")
+        if envelope is not None:
+            _require(
+                isinstance(envelope, str) and envelope,
+                where,
+                "envelope must be the name of an entry in arm_envelopes_file",
+            )
         signal = raw.get("signal")
         if signal is not None:
             _require(
@@ -372,6 +385,7 @@ class Until:
             grasp is not None
             or effort is not None
             or signal is not None
+            or envelope is not None
             or bool(raw.get("settled", False))
         )
         _require(
@@ -387,6 +401,7 @@ class Until:
             settled=bool(raw.get("settled", False)),
             effort=effort,
             signal=signal,
+            envelope=envelope,
             operator=operator,
             hold_s=hold,
         )
@@ -402,6 +417,7 @@ class Until:
             self.grasp is None
             and self.effort is None
             and self.signal is None
+            and self.envelope is None
             and not self.settled
             and not self.operator
         )

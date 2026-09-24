@@ -318,10 +318,17 @@ class OrchestratorNode(Node):
             for step in self.mission.steps
             if step.kind == "check_arms" and step.envelope
         }
+        wanted |= {
+            step.until.envelope
+            for step in self.mission.steps
+            if step.kind == "run_policy"
+            and step.until is not None
+            and step.until.envelope
+        }
         missing = sorted(name for name in wanted if name not in self.envelopes)
         if missing:
             raise MissionError(
-                f"check_arms names envelope(s) {missing} that are not in "
+                f"the mission names envelope(s) {missing} that are not in "
                 f"arm_envelopes_file (have {sorted(self.envelopes) or 'none'})"
             )
 
@@ -659,7 +666,16 @@ class OrchestratorNode(Node):
                 # one that never began.
                 self._end_action(action, False, str(exc))
                 return
-            self._monitor = PhaseMonitor(action.until, self.monitor_config, self._now())
+            self._monitor = PhaseMonitor(
+                action.until,
+                self.monitor_config,
+                self._now(),
+                envelope=(
+                    self.envelopes.get(action.until.envelope)
+                    if action.until.envelope
+                    else None
+                ),
+            )
             self._route_signal(action.until.signal)
             # The previous client is gone and this one has not published yet, so
             # the hold may cover the startup gap until its first chunk lands.

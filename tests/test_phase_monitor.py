@@ -213,3 +213,85 @@ def test_a_closing_gripper_is_not_an_arm_still_moving():
     monitor.update(t + 0.2, state(arm=39 * 0.05, left_finger=0.020))
     verdict = monitor.update(t + 1.0, state(arm=39 * 0.05, left_finger=0.002))
     assert verdict.done and verdict.ok
+
+
+# -- ending a phase at a POSE ------------------------------------------------
+
+from cerebel_orchestrator.envelopes import Envelope  # noqa: E402
+
+CARRY = Envelope(
+    name="carry",
+    description="lifted, holding",
+    limits={"openarm_left_joint4": (1.768, 2.348)},
+)
+
+
+def carry_state(j4, finger=0.005):
+    """16 canonical joints: left joint4 is the one the envelope constrains."""
+    v = [0.0] * 16
+    v[3] = j4
+    v[7] = finger
+    v[15] = 0.048
+    return v
+
+
+def test_a_pose_condition_ends_the_phase_when_the_arm_arrives():
+    until = Until(timeout_s=30, envelope="carry", hold_s=0.3)
+    mon = PhaseMonitor(until, CFG, 0.0, envelope=CARRY)
+
+    mon.observe(0.0, carry_state(0.41))          # rest: outside
+    assert not mon.verdict(0.0).done
+
+    mon.observe(1.0, carry_state(2.05))          # arrived
+    assert not mon.verdict(1.0).done, "must be held for hold_s"
+
+    mon.observe(1.4, carry_state(2.05))
+    verdict = mon.verdict(1.4)
+    assert verdict.done and verdict.ok
+    assert "envelope 'carry'" in verdict.reason
+
+
+def test_passing_through_the_envelope_does_not_end_the_phase():
+    """An arm that sweeps through the carry region on its way elsewhere has not
+    finished the pick."""
+    until = Until(timeout_s=30, envelope="carry", hold_s=0.5)
+    mon = PhaseMonitor(until, CFG, 0.0, envelope=CARRY)
+    mon.observe(0.0, carry_state(0.41))
+    mon.observe(0.2, carry_state(2.05))          # in
+    mon.observe(0.4, carry_state(2.05))
+    mon.observe(0.6, carry_state(0.90))          # out again, before hold_s
+    assert not mon.verdict(0.6).done
+    mon.observe(0.8, carry_state(2.05))          # back in: the hold restarts
+    assert not mon.verdict(1.0).done
+
+
+def test_pose_and_grasp_together_are_the_pick_condition():
+    until = Until(timeout_s=30, grasp="closed", side="left", envelope="carry", hold_s=0.3)
+    mon = PhaseMonitor(until, CFG, 0.0, envelope=CARRY)
+
+    mon.observe(0.0, carry_state(0.41, finger=0.040))   # rest, open: arms grasp
+    assert not mon.verdict(0.0).done
+
+    # Gripper closed but still down in the tote -- 44% of a real episode.
+    mon.observe(1.0, carry_state(0.41, finger=0.005))
+    mon.observe(1.5, carry_state(0.41, finger=0.005))
+    assert not mon.verdict(1.5).done, "closed but not lifted is not a finished pick"
+
+    # Lifted, still holding. The hold timer starts on the first verdict that
+    # sees the condition true, so it needs two calls hold_s apart.
+    mon.observe(2.0, carry_state(2.05, finger=0.005))
+    assert not mon.verdict(2.0).done
+    mon.observe(2.4, carry_state(2.05, finger=0.005))
+    assert mon.verdict(2.4).done
+
+
+def test_an_unresolved_envelope_says_so_at_the_timeout():
+    until = Until(timeout_s=2, envelope="typo", hold_s=0.3)
+    mon = PhaseMonitor(until, CFG, 0.0, envelope=None)
+    # Keep proprioception alive to the timeout, or the staleness check -- a
+    # different failure -- fires first.
+    for tick in range(31):
+        mon.observe(tick * 0.1, carry_state(2.05))
+    verdict = mon.verdict(3.0)
+    assert verdict.done and not verdict.ok
+    assert "never resolved" in verdict.reason
