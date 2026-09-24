@@ -501,6 +501,13 @@ class OrchestratorNode(Node):
         """
         if not self.hold_arms:
             return
+        if self._estop:
+            # docs/SAFETY.md: the software e-stop "stops this node's commanding".
+            # Republishing a held pose is still commanding, even though the value
+            # does not change -- the controller latches it anyway, so the arm
+            # stays exactly where it is either way. Stopping outright is what the
+            # document promises and costs nothing.
+            return
         kind = self._current.kind if self._current is not None else None
         # A park ramp owns the arms outright. And once a policy's client has
         # published, the rest of that phase is its own -- including its
