@@ -181,8 +181,15 @@ steps:
   # 7.5 s, in 75 of the 88 episodes that reach a rest. On hardware that looked
   # like the arm stopping midway, which is how it was found.
   #
-  # still_spread 0.04 over a 1.0 s window ends the phase a median 0.024 rad
-  # from the pose the arm actually rests at, against 0.143 before.
+  # AND `envelope: placed`, which is the other half. Stillness alone says the
+  # arm stopped; it does not say WHERE. Both arms end a place at a tight,
+  # repeatable pose -- across the 52 late episodes the standard deviation is
+  # 0.01 rad on left joint2 and 0.01 on right joint4 -- so that pose is a
+  # target, and `placed` is it.
+  #
+  # The envelope alone is not enough either: the arm passes through the region
+  # on its way in, so it fires at 77% of an episode. Arrived AND stopped fires
+  # in 44 of the 52 late episodes, at median 90%.
   #
   # `on_fail: continue` because the tighter condition fires in fewer episodes
   # (73/150 in replay) and the park step below is the backstop: a timeout here
@@ -190,7 +197,7 @@ steps:
   - step: run_policy
     policy: place_and_scan
     until: {timeout_s: 55.0, grasp: open, side: right,
-            settled: true, still_spread: 0.04, hold_s: 1.0}
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
     on_fail: continue
     #
     # WITH THE SCANNER, this becomes the strongest check in the mission --
