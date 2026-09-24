@@ -68,14 +68,20 @@ envelopes:
 
   travel:
     description: >
-      Both arms tucked, nothing held, about to drive. Checked before every
-      empty-handed `move_base` in three_station_kit -- the base moves with two
-      7-DOF arms on top of it, and after a place phase they are wherever the
-      policy left them.
+      Where the place policy actually leaves the arms, with both hands empty.
 
-      The difference from `carry` is the gripper bound: this envelope requires
-      the left finger OPEN, which is what proves the place actually released
-      the object rather than the phase ending on a transient.
+      NOT a tucked rest pose, despite the name. The demonstrator's intent was to
+      return to rest, but recording stops while the arms are still moving, so
+      the last frame catches them part-way: the left arm is close to rest, the
+      right arm ends near the box -- 0.52 rad out on joint3 and 0.65 on joint5.
+      These bounds describe that, because that is what a place phase will
+      actually produce.
+
+      Two consequences. As an end-of-mission check it is sound: the gripper
+      bounds prove both hands are empty, which is the real question. But a
+      SECOND cycle would start its pick with the right arm half a radian from
+      where all 152 pick demonstrations started it -- so a repeat needs a
+      `park_arms` back to `ready` between cycles, not this envelope.
     joints:
       # MEASURED: p2..p98 of the final frame of all 150 place episodes, arm
       # joints widened by 0.10 rad.
