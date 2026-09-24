@@ -6,12 +6,14 @@ arrives as a string, is a phase that runs the wrong policy while looking healthy
 """
 
 import logging
+import sys
 
 import pytest
 import yaml
 
 from cerebel_orchestrator.mission import Mission
 from cerebel_orchestrator.policy_runner import (
+    PolicyPrepareError,
     PolicyRunner,
     RunnerConfig,
     describe_command,
@@ -122,3 +124,59 @@ def test_describe_command_matches_what_would_run(policy):
     text = describe_command(policy, "LABEL", config)
     assert "inference_client" in text and "LABEL" in text
     assert "'pick up the green cube and place it in the box'" in text
+
+
+# -- re-initialising the arm controller between policies ---------------------
+
+def prepare_runner(cmd, **overrides):
+    config = RunnerConfig(prepare_cmd=cmd, **overrides)
+    return PolicyRunner(config, logging.getLogger("prepare-test"))
+
+
+def test_no_prepare_command_is_a_no_op():
+    assert prepare_runner([]).prepare() is None
+
+
+def test_a_successful_prepare_returns_none():
+    runner = prepare_runner([sys.executable, "-c", "pass"])
+    assert runner.prepare() is None
+
+
+def test_a_failing_prepare_reports_the_exit_code_and_the_tail():
+    runner = prepare_runner(
+        [sys.executable, "-c", "import sys; print('controller not found'); sys.exit(3)"]
+    )
+    error = runner.prepare()
+    assert error is not None
+    assert "exited 3" in error
+    assert "controller not found" in error
+
+
+def test_a_missing_prepare_command_is_named_not_raised():
+    error = prepare_runner(["definitely-not-a-real-binary-xyzzy"]).prepare()
+    assert error is not None and "not found" in error
+
+
+def test_a_hanging_prepare_is_bounded_by_its_timeout():
+    runner = prepare_runner(
+        [sys.executable, "-c", "import time; time.sleep(30)"], prepare_timeout_s=0.5
+    )
+    error = runner.prepare()
+    assert error is not None and "timed out" in error
+
+
+def test_a_failed_prepare_stops_the_client_from_starting(policy):
+    """The phase must fail before a process is handed the arms."""
+    runner = prepare_runner([sys.executable, "-c", "import sys; sys.exit(1)"])
+    with pytest.raises(PolicyPrepareError):
+        runner.start(policy, "run")
+    assert not runner.running, "no session may exist after a failed prepare"
+
+
+def test_mock_skips_the_prepare_entirely(policy):
+    runner = prepare_runner(
+        ["definitely-not-a-real-binary-xyzzy"], mock=True, log_dir="/tmp/x"
+    )
+    assert runner.prepare() is None
+    runner.start(policy, "run")
+    assert runner.running

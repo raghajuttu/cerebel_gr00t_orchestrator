@@ -18,6 +18,19 @@ What "switching policies" means concretely:
   on the GPU box. Nothing here can make a running server load another
   checkpoint.
 
+Some robots need the arm controller re-initialised between clients -- on this
+one that is a manual step in the operator's procedure, done between every
+policy run. ``prepare_cmd`` is where it goes: a command run once, immediately
+before each client starts, with a bounded timeout and a failure that fails the
+phase before anything moves. It is off by default (empty), so a robot that does
+not need it behaves exactly as before.
+
+**A prepare command must not disturb what the arms are holding.** The
+pick-and-carry mission depends on ``forward_position_controller`` latching its
+last command across a policy switch; if re-initialising the controller drops or
+re-seeds that latch, the object falls and the carry step has to be rethought.
+See docs/POLICY_SWITCHING.md.
+
 Stopping is where the care is. SIGINT is sent first so rclpy shuts the node down
 the way Ctrl-C does; the arms then hold the last commanded position, because
 ``forward_position_controller`` latches its last command. Only if the client
@@ -37,6 +50,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .mission import Policy
+
+
+class PolicyPrepareError(RuntimeError):
+    """The arm controller could not be re-initialised, so no client was started.
+
+    Raised rather than returned because it happens inside ``start``, and a
+    caller that ignored it would go on to monitor a phase that never began.
+    """
+
 
 DEFAULT_POLICY_CMD: List[str] = [
     "ros2",
@@ -94,6 +116,13 @@ class RunnerConfig:
     sigint_grace_s: float = 5.0
     sigterm_grace_s: float = 3.0
     startup_grace_s: float = 20.0
+    # Run before every client start. Empty disables it. See the module docstring.
+    prepare_cmd: List[str] = field(default_factory=list)
+    prepare_timeout_s: float = 15.0
+    # Time to let the controller settle after prepare_cmd returns, before the
+    # client's first action chunk arrives. A controller that has just been
+    # activated is not necessarily tracking yet.
+    prepare_settle_s: float = 0.0
 
 
 class PolicyRunner:
@@ -130,6 +159,43 @@ class PolicyRunner:
             argv += ["-p", f"{name}:={yaml_scalar(value)}"]
         return argv
 
+    def prepare(self) -> Optional[str]:
+        """Re-initialise the arm controller. Returns an error string, or None.
+
+        This blocks, like ``stop`` does and for the same reason: the next thing
+        that happens is a process being handed the arms, and it must not happen
+        while the controller is half-configured. The wait is bounded by
+        ``prepare_timeout_s`` and the robot is stationary throughout.
+        """
+        if not self.config.prepare_cmd or self.config.mock:
+            return None
+        command = list(self.config.prepare_cmd)
+        self.log.info(f"preparing the arm controller: {' '.join(command)}")
+        try:
+            done = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                timeout=self.config.prepare_timeout_s,
+            )
+        except FileNotFoundError:
+            return f"prepare command not found: {command[0]!r}"
+        except subprocess.TimeoutExpired:
+            return (
+                f"prepare command timed out after {self.config.prepare_timeout_s:.0f}s: "
+                f"{' '.join(command)}"
+            )
+        if done.returncode != 0:
+            tail = (done.stdout or b"").decode(errors="replace").strip().splitlines()[-5:]
+            return (
+                f"prepare command exited {done.returncode}: {' '.join(command)}"
+                + (" -- " + " | ".join(tail) if tail else "")
+            )
+        if self.config.prepare_settle_s > 0:
+            time.sleep(self.config.prepare_settle_s)
+        return None
+
     def start(self, policy: Policy, run_label: str) -> Session:
         if self.session is not None:
             raise RuntimeError(
@@ -138,6 +204,10 @@ class PolicyRunner:
             )
         argv = self.build_argv(policy, run_label)
         self.log.info(f"policy {policy.name}: {' '.join(argv)}")
+
+        error = self.prepare()
+        if error is not None:
+            raise PolicyPrepareError(error)
 
         if self.config.mock:
             self.session = Session(

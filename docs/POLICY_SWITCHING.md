@@ -143,6 +143,54 @@ compare. Things worth noting:
   wrap it:
   `["bash", "-lc", "source ~/Desktop/gripper/install/setup.bash && exec ros2 run adibot_gr00t_client inference_client"]`.
 
+## Re-initialising the arm controller between policies
+
+The manual procedure on this robot is: bring the forward position controller
+up, run one VLA, bring it up again, run the next. The orchestrator switches
+policies by restarting the inference client, so it has to do that same step.
+
+`policy_prepare_cmd` is where it goes. It runs once, immediately before each
+client starts:
+
+```yaml
+policy_prepare_cmd: ["ros2", "control", "switch_controllers",
+                     "--activate", "left_forward_position_controller",
+                     "--activate", "right_forward_position_controller"]
+policy_prepare_timeout_s: 15.0
+policy_prepare_settle_s: 0.0
+```
+
+It is **empty by default**, so a robot that does not need it behaves exactly as
+before. The command is a list, not a shell string: there is no shell, so no
+quoting to get wrong, and no `&&`. Wrap anything more involved in a script.
+
+Ordering within one phase:
+
+```
+prepare_cmd  ->  settle  ->  client starts  ->  server ping  ->  first chunk
+```
+
+A non-zero exit, a missing binary or a timeout fails the phase **before** any
+client is started, with the command's last output lines in the reason. Nothing
+has moved at that point.
+
+### The thing to check before trusting it
+
+Whatever this command does, it must not disturb what the arms are holding.
+
+Pick-and-carry depends on `forward_position_controller` latching its last
+command across the switch: the pick policy ends holding the object, the client
+is killed, and the arms keep holding it through the base move and into the
+place policy. If re-activating the controller re-seeds that latch from the
+current measured state, the standing follower offset gets baked in at every
+switch. If it drops the latch entirely, the object falls.
+
+Test it directly, before any mission: pick something up by hand into the
+gripper, run the prepare command, and watch whether the arm holds, sags or
+lets go. That answer decides whether the carry steps in
+`three_station_kit.yaml` are sound or whether the place has to happen at the
+same station as the pick.
+
 ## Stopping
 
 `SIGINT` first — the same signal Ctrl-C sends, so rclpy shuts the node down
