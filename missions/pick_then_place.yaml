@@ -7,34 +7,42 @@
 #
 # The shape:
 #
-#   park to the pose the pick episodes start from  ->  the pick policy picks the
-#   object and comes to rest holding it, arm up  ->  the place policy starts
-#   FROM THERE, hands over to the right arm, presents it to the scanner and puts
-#   it in the box.
+#   arms at rest, where every pick episode starts  ->  the pick policy picks the
+#   object and holds it  ->  the place policy starts FROM THERE, hands over to
+#   the right arm, presents it to the scanner and puts it in the box.
+#
+# **THE ORCHESTRATOR COMMANDS NO ACTUATOR IN THIS MISSION.** No park ramp
+# (there is no park step, and enable_park is false), no arm hold
+# (hold_arms_between_policies is false), no base. It starts one inference
+# client, watches the gripper, stops it, and starts the next. Every joint that
+# moves is moved by a policy.
 #
 # **There is deliberately nothing between the two policies.** No park, no
 # check_arms, no wait. The place policy's first observation has to be the pick
 # policy's last pose, because that is how the episodes were recorded. Anything
 # inserted here changes the pose the place starts from.
 #
-# What holds the arms during the switch: the old client is killed, the new one
-# takes a few seconds to build its limits, subscribe and ping the server, and
-# for those seconds nobody would be publishing. `hold_arms_between_policies`
-# republishes the last COMMANDED pose at 30 Hz until the new client's first
-# chunk lands. See cerebel_orchestrator/arm_hold.py.
+# What holds the arms during the switch: nothing, deliberately.
+# forward_position_controller latches its last command, so the arms should keep
+# holding the pick pose on their own through the few seconds the next client
+# takes to start. THAT IS THE THING THIS RUN IS TESTING. If they sag or drop
+# the object instead, set hold_arms_between_policies: true and the orchestrator
+# will republish the last commanded pose at 30 Hz through the gap
+# (cerebel_orchestrator/arm_hold.py) -- but see the sag first.
 #
 # What must NOT happen during the switch: re-initialising the forward position
 # controller. That resets the arm, and a reset arm has dropped the object. Leave
 # `policy_prepare_cmd` empty -- bring the controller up once, before the
 # mission, and let the orchestrator cycle only the inference client.
 #
-# NUMBERS TO REPLACE BEFORE RUNNING:
-#   * task_description  -- must match the training annotation VERBATIM. Check
-#                          `wc -l <dataset>/meta/tasks.jsonl` first: if that is
-#                          one line, the two strings below are not two
-#                          behaviours and this mission cannot work as written.
-#   * the grasp thresholds in params/orchestrator.yaml, measured off a run log
-#   * the `ready` park pose -- all zeros until you set it
+# EVERY NUMBER IN THIS FILE IS MEASURED, not guessed. The two prompts are
+# verbatim from meta/tasks.jsonl of 20260923_pick_and_scan_and_place_01; the
+# timeouts are p95 episode duration doubled; the grasp thresholds in
+# params/orchestrator.yaml sit in the measured gap between a closed gripper
+# (0.006..0.019 m) and an open one (0.045..0.050 m).
+#
+# The one thing still unverified is `checkpoint_label` below, which is a log
+# label only and changes no behaviour.
 
 name: pick_then_place
 frame_id: odom
@@ -87,10 +95,14 @@ policies:
     params: *policy_params
 
 steps:
-  # Start where the pick episodes started, and with the gripper open -- which is
-  # also what arms the `grasp: closed` condition below. Drop this step if the
-  # arms are already parked there by hand.
-  - {step: park_arms, profile: ready}
+  # NO park step. The pick episodes all start from the arms' rest pose, which is
+  # where they already are, so there is nothing for the orchestrator to do --
+  # and this mission is deliberately the one where the orchestrator commands no
+  # actuator at all. It starts a policy, watches the gripper, stops the policy,
+  # starts the next one. That is the whole test.
+  #
+  # Put `- {step: park_arms, profile: ready}` back, and set enable_park: true,
+  # once the switch itself is proven and you want the arms placed repeatably.
 
   # The pick ends when the left gripper has closed on the object AND the arm has
   # come to rest. Both, not the first to fire: a grasp registered mid-reach

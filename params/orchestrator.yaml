@@ -135,7 +135,17 @@ orchestrator:
     # new client's first chunk lands. Never the measured state: the follower
     # sits a standing offset behind the command and holding the measurement
     # would walk the arm backwards at every switch.
-    hold_arms_between_policies: true
+    # FALSE for the first runs, on purpose. The orchestrator then publishes
+    # NOTHING to the arm command topics -- it only starts and stops the
+    # inference client -- so the first hardware test measures exactly one
+    # thing: does policy switching work.
+    #
+    # forward_position_controller latches its last command, so the arms should
+    # hold the pick pose through the switch on their own. If they sag or drop
+    # the object during those few seconds, that is what this setting is for:
+    # turn it on and it republishes the last COMMANDED pose at 30 Hz until the
+    # new client speaks. Turn it on only after you have seen the sag.
+    hold_arms_between_policies: false
     hold_quiet_s: 0.25          # topic silence before a hold takes over
     left_arm_command_topic: /left_forward_position_controller/commands
     right_arm_command_topic: /right_forward_position_controller/commands
