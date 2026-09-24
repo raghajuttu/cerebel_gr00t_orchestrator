@@ -112,6 +112,12 @@ orchestrator:
     # five phases in six. Use 0.20 with hold_s 0.3, and prefer dropping
     # `settled` altogether where a gripper condition already decides the phase.
     motion_eps: 0.20
+    # The robot-wide stillness threshold: how far any arm joint may travel
+    # within a step's hold window and still count as parked. A step can ask for
+    # a stricter one with `still_spread` in its `until`, which the place phase
+    # does. MEASURED: 0.04 over 1.0 s ends a place a median 0.024 rad from the
+    # pose the arm actually rests at.
+    still_spread_rad: 0.04
     settle_grace_s: 3.0
     # A policy phase fails if /joint_states goes quiet for this long.
     stale_state_s: 1.0

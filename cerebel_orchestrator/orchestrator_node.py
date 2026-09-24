@@ -120,7 +120,8 @@ class OrchestratorNode(Node):
         # Phase termination -- measure these off a real run before trusting them
         self.declare_parameter("grasp_close_m", 0.010)
         self.declare_parameter("grasp_open_m", 0.030)
-        self.declare_parameter("motion_eps", 0.05)  # rad/s, a speed
+        self.declare_parameter("motion_eps", 0.20)  # rad/s; arming only
+        self.declare_parameter("still_spread_rad", 0.04)  # rad over hold_s
         self.declare_parameter("settle_grace_s", 3.0)
         self.declare_parameter("stale_state_s", 1.0)
 
@@ -169,6 +170,7 @@ class OrchestratorNode(Node):
             grasp_close_m=float(get("grasp_close_m").value),
             grasp_open_m=float(get("grasp_open_m").value),
             motion_eps=float(get("motion_eps").value),
+            still_spread_rad=float(get("still_spread_rad").value),
             settle_grace_s=float(get("settle_grace_s").value),
             stale_state_s=float(get("stale_state_s").value),
             # A phase that has just started gets the client's warm-up time
