@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from .mission import Mission, Policy, Station, Step, Until
+from .mission import Mission, Policy, Position, Station, Step, Until
 
 
 class Phase(str, Enum):
@@ -52,6 +52,9 @@ TERMINAL_PHASES = (Phase.DONE, Phase.ABORTED, Phase.FAULT)
 
 _PHASE_FOR_KIND = {
     "navigate": Phase.NAVIGATE,
+    # Both kinds drive the base, so both are the same phase. The interlock and
+    # the status topic care that the wheels may turn, not which stack turns them.
+    "move_base": Phase.NAVIGATE,
     "run_policy": Phase.POLICY,
     "park_arms": Phase.PARK,
     "check_arms": Phase.CHECK,
@@ -73,6 +76,7 @@ class Action:
     attempt: int
     run_label: str
     station: Optional[Station] = None
+    position: Optional[Position] = None
     policy: Optional[Policy] = None
     until: Optional[Until] = None
     seconds: Optional[float] = None
@@ -222,6 +226,7 @@ class MissionRunner:
             attempt=self.attempt,
             run_label="_".join(label_bits),
             station=self.mission.stations.get(step.station) if step.station else None,
+            position=self.mission.positions.get(step.position) if step.position else None,
             policy=self.mission.policies.get(step.policy) if step.policy else None,
             until=step.until,
             seconds=step.seconds,

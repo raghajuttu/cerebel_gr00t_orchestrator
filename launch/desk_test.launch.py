@@ -38,11 +38,16 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("mission", default_value="two_station_pick_place"),
-            DeclareLaunchArgument("kinematics", default_value="diff_drive"),
+            DeclareLaunchArgument("kinematics", default_value="holonomic"),
             DeclareLaunchArgument(
                 "holonomic",
-                default_value="false",
-                description="make the fake base able to strafe (pair with kinematics:=holonomic)",
+                default_value="true",
+                description=(
+                    "make the fake base able to strafe. True by default because "
+                    "the real chassis is four-wheel swerve: with this false a "
+                    "lateral move_base step integrates zero wheel rpm and runs "
+                    "to its timeout"
+                ),
             ),
             DeclareLaunchArgument(
                 "grasp_after_s",

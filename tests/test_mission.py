@@ -266,3 +266,104 @@ def test_the_shipped_pick_and_carry_mission_is_clean():
     assert kinds[pick + 1] == "check_arms" and kinds[pick + 2] == "navigate"
     assert mission.steps[pick].ends_parked
     assert mission.steps[pick].until.settled and mission.steps[pick].until.grasp == "closed"
+
+
+# -- move_base: positions, the axis anchor, and the lint ---------------------
+
+MOVES = """
+name: m
+positions:
+  p1: {axis_cm: 0.0}
+  p2: {axis_cm: 38.0}
+start_position: p1
+policies:
+  grab:
+    task_description: "pick up lipstick"
+    server_host: 127.0.0.1
+    server_port: 5555
+steps:
+  - {step: park_arms, profile: travel}
+  - {step: move_base, to: p2}
+  - {step: run_policy, policy: grab, until: {timeout_s: 60, grasp: closed, side: left}}
+"""
+
+
+def test_move_base_mission_round_trips():
+    mission = load(MOVES)
+    assert mission.start_position == "p1"
+    assert mission.positions["p2"].axis_cm == pytest.approx(38.0)
+    assert mission.steps[1].kind == "move_base"
+    assert mission.steps[1].position == "p2"
+    assert mission.steps[1].axis == "lateral", "lateral is the default axis"
+
+
+def test_unknown_position_is_rejected_by_name():
+    with pytest.raises(MissionError, match="p9"):
+        load(MOVES.replace("to: p2", "to: p9"))
+
+
+def test_move_base_without_a_start_position_is_rejected():
+    """Every move distance is measured from the anchor, so there must be one."""
+    with pytest.raises(MissionError, match="start_position"):
+        load(MOVES.replace("start_position: p1\n", ""))
+
+
+def test_start_position_must_name_a_real_position():
+    with pytest.raises(MissionError, match="start_position"):
+        load(MOVES.replace("start_position: p1", "start_position: nowhere"))
+
+
+def test_axis_must_be_one_of_the_two():
+    with pytest.raises(MissionError, match="axis"):
+        load(MOVES.replace("{step: move_base, to: p2}", "{step: move_base, to: p2, axis: up}"))
+
+
+def test_axis_cm_that_looks_like_metres_is_rejected():
+    """0.38 would be a silent 38x error; the range check is what catches it."""
+    with pytest.raises(MissionError, match="centimetres"):
+        load(MOVES.replace("axis_cm: 38.0", "axis_cm: 5000.0"))
+
+
+def test_a_navigate_station_is_not_usable_as_a_move_base_position():
+    """The two tables are separate on purpose -- one is a pose, one is not."""
+    with pytest.raises(MissionError, match="not in positions"):
+        load(
+            MOVES.replace("positions:\n  p1: {axis_cm: 0.0}\n  p2: {axis_cm: 38.0}",
+                          "positions:\n  p1: {axis_cm: 0.0}\nstations:\n  p2: {x: 0.0, y: 0.4}")
+        )
+
+
+def test_the_lint_treats_move_base_like_navigate():
+    """Driving with the arms wherever a policy left them is the hazard, and it
+    does not care which stack is turning the wheels."""
+    from cerebel_orchestrator.mission import navigate_safety_warnings
+
+    # A park at the start, then a policy, then a move: the park is real, so
+    # this exercises the walk-back rather than the "never parks at all" case.
+    unsafe = MOVES.replace(
+        "  - {step: move_base, to: p2}",
+        "  - {step: run_policy, policy: grab, until: {timeout_s: 60}}\n"
+        "  - {step: move_base, to: p2}",
+    )
+    warnings = navigate_safety_warnings(load(unsafe))
+    assert warnings and any("move_base" in w for w in warnings), warnings
+
+
+def test_the_lint_accepts_a_carry_move_after_an_ends_parked_policy():
+    """Pick-and-carry: parking between the pick and the drive would drop the
+    object, so `ends_parked` is the policy's claim that it finished drive-safe."""
+    from cerebel_orchestrator.mission import navigate_safety_warnings
+
+    carry = MOVES.replace(
+        "  - {step: move_base, to: p2}",
+        "  - {step: run_policy, policy: grab, ends_parked: true, "
+        "until: {timeout_s: 60, grasp: closed, side: left, settled: true}}\n"
+        "  - {step: move_base, to: p2}",
+    )
+    assert navigate_safety_warnings(load(carry)) == []
+
+
+def test_the_lint_is_quiet_when_a_park_precedes_the_move():
+    from cerebel_orchestrator.mission import navigate_safety_warnings
+
+    assert navigate_safety_warnings(load(MOVES)) == []

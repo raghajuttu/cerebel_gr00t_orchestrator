@@ -27,9 +27,23 @@ import yaml
 MAX_TIMEOUT_S = 600.0
 
 ON_FAIL_CHOICES = ("abort", "retry", "continue")
-STEP_KINDS = ("navigate", "run_policy", "park_arms", "check_arms", "wait")
+STEP_KINDS = (
+    "navigate",
+    "move_base",
+    "run_policy",
+    "park_arms",
+    "check_arms",
+    "wait",
+)
 GRASP_STATES = ("closed", "open")
 SIDES = ("left", "right")
+MOVE_AXES = ("lateral", "axial")
+SIGNAL_TYPES = ("bool", "string", "float")
+SIGNAL_MODES = ("event", "level")
+
+# Both step kinds that drive the base. The lint and the interlock care that the
+# base is moving, not which mechanism is moving it.
+BASE_STEP_KINDS = ("navigate", "move_base")
 
 
 class MissionError(ValueError):
@@ -76,6 +90,117 @@ class Station:
             x=_as_float(raw["x"], where, "x"),
             y=_as_float(raw["y"], where, "y"),
             yaw=yaw,
+        )
+
+
+@dataclass(frozen=True)
+class Position:
+    """A place on one line, reached by driving a measured distance to it.
+
+    This is what ``move_base`` steps refer to, and it is deliberately not a
+    ``Station``. A station is a pose in a frame that something maintains; a
+    position is one number on an axis, and the robot gets there by driving a
+    distance and counting wheel arc. There is no frame and no pose -- see
+    ``base_move.py`` for why the chassis cannot offer one yet.
+
+    ``axis_cm`` is signed and measured from wherever the mission starts
+    (``start_position``). On the lateral axis, positive is left.
+    """
+
+    name: str
+    axis_cm: float
+
+    @staticmethod
+    def parse(name: str, raw: Any) -> "Position":
+        where = f"positions.{name}"
+        _require(isinstance(raw, dict), where, "must be a mapping with axis_cm")
+        unknown = set(raw) - {"axis_cm"}
+        _require(not unknown, where, f"unknown keys {sorted(unknown)}")
+        _require("axis_cm" in raw, where, "missing axis_cm")
+        axis_cm = _as_float(raw["axis_cm"], where, "axis_cm")
+        _require(
+            abs(axis_cm) <= 1000.0,
+            where,
+            f"axis_cm {axis_cm} is out of range -- it is centimetres, not metres",
+        )
+        return Position(name=name, axis_cm=axis_cm)
+
+
+@dataclass(frozen=True)
+class Signal:
+    """An external completion signal -- a sensor, not proprioception.
+
+    The grasp and settle conditions are read off ``/joint_states``, which means
+    they can only ever answer questions about the robot. "Did the scanner read
+    the barcode", "is there something in the box", "did a load cell see the
+    weight arrive" are questions about the *world*, and they need something
+    outside the arm to answer them.
+
+    A signal names a topic and how to read it:
+
+    ``type``
+        ``bool`` (``std_msgs/Bool``), ``string`` (``std_msgs/String`` -- any
+        non-empty value is a firing), or ``float`` (``std_msgs/Float64``,
+        compared against ``above`` or ``below``).
+    ``mode``
+        ``event`` latches: once it fires during a phase it stays fired, which
+        is what a barcode read is -- instantaneous and easily missed by a 10 Hz
+        verdict. ``level`` must be true at the moment the verdict is taken,
+        which is what a beam break or a load cell is.
+    ``arm``
+        ``level`` signals must be seen false before they may fire, for the same
+        reason the grasp conditions must: a box that already has something in
+        it would otherwise satisfy "something arrived in the box" on the first
+        tick. Set false only when the starting state genuinely cannot be true.
+    """
+
+    name: str
+    topic: str
+    type: str = "bool"
+    mode: str = "event"
+    above: Optional[float] = None
+    below: Optional[float] = None
+    arm: bool = True
+
+    @staticmethod
+    def parse(name: str, raw: Any) -> "Signal":
+        where = f"signals.{name}"
+        _require(isinstance(raw, dict), where, "must be a mapping with a topic")
+        unknown = set(raw) - {"topic", "type", "mode", "above", "below", "arm"}
+        _require(not unknown, where, f"unknown keys {sorted(unknown)}")
+        topic = raw.get("topic")
+        _require(isinstance(topic, str) and topic, where, "missing topic")
+        kind = str(raw.get("type", "bool"))
+        _require(kind in SIGNAL_TYPES, where, f"type must be one of {SIGNAL_TYPES}")
+        mode = str(raw.get("mode", "event"))
+        _require(mode in SIGNAL_MODES, where, f"mode must be one of {SIGNAL_MODES}")
+        above = raw.get("above")
+        below = raw.get("below")
+        above = _as_float(above, where, "above") if above is not None else None
+        below = _as_float(below, where, "below") if below is not None else None
+        if kind == "float":
+            _require(
+                above is not None or below is not None,
+                where,
+                "a float signal needs `above` or `below` -- without a threshold "
+                "there is nothing to compare the reading against",
+            )
+        else:
+            _require(
+                above is None and below is None,
+                where,
+                f"`above`/`below` only apply to a float signal, not {kind}",
+            )
+        if above is not None and below is not None:
+            _require(above < below, where, "above must be less than below")
+        return Signal(
+            name=name,
+            topic=topic,
+            type=kind,
+            mode=mode,
+            above=above,
+            below=below,
+            arm=bool(raw.get("arm", True)),
         )
 
 
@@ -183,13 +308,28 @@ class Until:
     grasp: Optional[str] = None
     side: Optional[str] = None
     settled: bool = False
+    # A minimum |effort| on the side's finger joint. Position says how far the
+    # gripper closed; effort says whether it is actually pushing on something,
+    # which is a much larger signal on a gripper whose whole travel is 5 cm.
+    effort: Optional[float] = None
+    # The name of an external signal that must have fired. See `Signal`.
+    signal: Optional[str] = None
     operator: bool = False
     hold_s: float = 0.5
 
     @staticmethod
     def parse(raw: Any, where: str) -> "Until":
         _require(isinstance(raw, dict), where, "must be a mapping with at least timeout_s")
-        unknown = set(raw) - {"timeout_s", "grasp", "side", "settled", "operator", "hold_s"}
+        unknown = set(raw) - {
+            "timeout_s",
+            "grasp",
+            "side",
+            "settled",
+            "effort",
+            "signal",
+            "operator",
+            "hold_s",
+        }
         _require(not unknown, where, f"unknown keys {sorted(unknown)}")
         _require(
             "timeout_s" in raw,
@@ -205,6 +345,22 @@ class Until:
             _require(side is not None, where, "grasp needs side: left or right")
         if side is not None:
             _require(side in SIDES, where, f"side must be one of {SIDES}")
+        effort = raw.get("effort")
+        if effort is not None:
+            effort = _as_float(effort, where, "effort")
+            _require(effort > 0, where, "effort must be positive -- it is a magnitude")
+            _require(
+                side is not None,
+                where,
+                "effort needs side: left or right -- it reads one finger joint",
+            )
+        signal = raw.get("signal")
+        if signal is not None:
+            _require(
+                isinstance(signal, str) and signal,
+                where,
+                "signal must be the name of an entry in the mission's `signals`",
+            )
         hold = _as_float(raw.get("hold_s", 0.5), where, "hold_s")
         _require(
             0 <= hold < timeout,
@@ -212,17 +368,25 @@ class Until:
             "hold_s must be non-negative and shorter than timeout_s",
         )
         operator = bool(raw.get("operator", False))
+        automatic = (
+            grasp is not None
+            or effort is not None
+            or signal is not None
+            or bool(raw.get("settled", False))
+        )
         _require(
-            not (operator and (grasp is not None or bool(raw.get("settled", False)))),
+            not (operator and automatic),
             where,
-            "operator cannot be combined with grasp or settled -- operator means "
-            "this phase has no automatic end",
+            "operator cannot be combined with any automatic condition -- operator "
+            "means this phase has no automatic end",
         )
         return Until(
             timeout_s=timeout,
             grasp=grasp,
             side=side,
             settled=bool(raw.get("settled", False)),
+            effort=effort,
+            signal=signal,
             operator=operator,
             hold_s=hold,
         )
@@ -234,7 +398,13 @@ class Until:
         With no early condition set, running the policy for ``timeout_s`` is
         exactly what the step asked for, so hitting the clock is not a failure.
         """
-        return self.grasp is None and not self.settled and not self.operator
+        return (
+            self.grasp is None
+            and self.effort is None
+            and self.signal is None
+            and not self.settled
+            and not self.operator
+        )
 
 
 @dataclass(frozen=True)
@@ -244,6 +414,8 @@ class Step:
     index: int
     kind: str
     station: Optional[str] = None
+    position: Optional[str] = None
+    axis: str = "lateral"
     policy: Optional[str] = None
     profile: Optional[str] = None
     envelope: Optional[str] = None
@@ -259,6 +431,8 @@ class Step:
     def describe(self) -> str:
         if self.kind == "navigate":
             return f"navigate -> {self.station}"
+        if self.kind == "move_base":
+            return f"move_base -> {self.position} ({self.axis})"
         if self.kind == "run_policy":
             tail = " (ends parked)" if self.ends_parked else ""
             return f"run_policy {self.policy}{tail}"
@@ -276,6 +450,7 @@ class Step:
         _require(kind in STEP_KINDS, where, f"step must be one of {STEP_KINDS}, got {kind!r}")
         allowed = {"step", "on_fail", "retries"} | {
             "navigate": {"station"},
+            "move_base": {"to", "axis"},
             "run_policy": {"policy", "until", "ends_parked"},
             "park_arms": {"profile"},
             "check_arms": {"envelope", "seconds"},
@@ -297,11 +472,21 @@ class Step:
         if on_fail == "retry":
             _require(retries > 0, where, "on_fail: retry needs retries > 0")
 
-        station = policy = profile = envelope = seconds = until = None
+        station = position = policy = profile = envelope = seconds = until = None
+        axis = "lateral"
         ends_parked = False
         if kind == "navigate":
             station = raw.get("station")
             _require(isinstance(station, str) and station, where, "navigate needs station")
+        elif kind == "move_base":
+            position = raw.get("to")
+            _require(
+                isinstance(position, str) and position,
+                where,
+                "move_base needs `to`, the name of a position",
+            )
+            axis = str(raw.get("axis", "lateral"))
+            _require(axis in MOVE_AXES, where, f"axis must be one of {MOVE_AXES}, got {axis!r}")
         elif kind == "run_policy":
             policy = raw.get("policy")
             _require(isinstance(policy, str) and policy, where, "run_policy needs policy")
@@ -328,6 +513,8 @@ class Step:
             index=index,
             kind=kind,
             station=station,
+            position=position,
+            axis=axis,
             policy=policy,
             profile=profile,
             envelope=envelope,
@@ -346,18 +533,42 @@ class Mission:
     stations: Dict[str, Station]
     policies: Dict[str, Policy]
     steps: List[Step]
+    positions: Dict[str, Position] = field(default_factory=dict)
+    signals: Dict[str, Signal] = field(default_factory=dict)
+    # Where the robot is standing when the mission begins. Every ``move_base``
+    # distance is computed from here, so it is the one place the axis is
+    # anchored -- and it is an assertion about the world, not a measurement.
+    start_position: Optional[str] = None
     repeat: int = 1
 
     @staticmethod
     def from_dict(raw: Any) -> "Mission":
         _require(isinstance(raw, dict), "mission", "the file must contain a mapping")
-        unknown = set(raw) - {"name", "frame_id", "stations", "policies", "steps", "repeat"}
+        unknown = set(raw) - {
+            "name",
+            "frame_id",
+            "stations",
+            "positions",
+            "signals",
+            "start_position",
+            "policies",
+            "steps",
+            "repeat",
+        }
         _require(not unknown, "mission", f"unknown top-level keys {sorted(unknown)}")
         _require("steps" in raw, "mission", "missing steps")
 
         stations = {
             name: Station.parse(name, body)
             for name, body in (raw.get("stations") or {}).items()
+        }
+        positions = {
+            name: Position.parse(name, body)
+            for name, body in (raw.get("positions") or {}).items()
+        }
+        signals = {
+            name: Signal.parse(name, body)
+            for name, body in (raw.get("signals") or {}).items()
         }
         policies = {
             name: Policy.parse(name, body)
@@ -374,6 +585,15 @@ class Mission:
             "must be an integer >= 1",
         )
 
+        start_position = raw.get("start_position")
+        if start_position is not None:
+            start_position = str(start_position)
+            _require(
+                start_position in positions,
+                "mission.start_position",
+                f"{start_position!r} is not in positions ({sorted(positions) or 'none defined'})",
+            )
+
         # Cross-references last, so the message names the step, not the table.
         for step in steps:
             if step.kind == "navigate" and step.station not in stations:
@@ -381,16 +601,44 @@ class Mission:
                     f"steps[{step.index}]: station {step.station!r} is not in stations "
                     f"({sorted(stations) or 'none defined'})"
                 )
+            if step.kind == "move_base" and step.position not in positions:
+                raise MissionError(
+                    f"steps[{step.index}]: position {step.position!r} is not in positions "
+                    f"({sorted(positions) or 'none defined'})"
+                )
             if step.kind == "run_policy" and step.policy not in policies:
                 raise MissionError(
                     f"steps[{step.index}]: policy {step.policy!r} is not in policies "
                     f"({sorted(policies) or 'none defined'})"
                 )
+            if (
+                step.kind == "run_policy"
+                and step.until is not None
+                and step.until.signal is not None
+                and step.until.signal not in signals
+            ):
+                raise MissionError(
+                    f"steps[{step.index}]: signal {step.until.signal!r} is not in "
+                    f"signals ({sorted(signals) or 'none defined'})"
+                )
+
+        # A move_base mission that never says where it starts has no anchor for
+        # its axis, and the first move would be computed from a guess.
+        if any(step.kind == "move_base" for step in steps):
+            _require(
+                start_position is not None,
+                "mission.start_position",
+                "a mission with move_base steps must declare where the robot "
+                "starts -- every move distance is measured from it",
+            )
 
         return Mission(
             name=str(raw.get("name", "unnamed")),
             frame_id=str(raw.get("frame_id", "odom")),
             stations=stations,
+            positions=positions,
+            signals=signals,
+            start_position=start_position,
             policies=policies,
             steps=steps,
             repeat=repeat,
@@ -440,7 +688,7 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
     """
     warnings: List[str] = []
     steps = mission.steps
-    if not any(step.kind == "navigate" for step in steps):
+    if not any(step.kind in BASE_STEP_KINDS for step in steps):
         return warnings
     settles_the_arms = [
         step
@@ -450,7 +698,7 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
     ]
     if not settles_the_arms:
         warnings.append(
-            "the mission navigates but never parks, checks or declares the arms "
+            "the mission moves the base but never parks, checks or declares the arms "
             "safe -- the base will move with them wherever the policy left them"
         )
         return warnings
@@ -465,7 +713,7 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
 
     for position in range(len(order)):
         step = steps[order[position]]
-        if step.kind != "navigate":
+        if step.kind not in BASE_STEP_KINDS:
             continue
         culprit: Optional[Step] = None
         for back in range(position - 1, -1, -1):
@@ -482,7 +730,7 @@ def navigate_safety_warnings(mission: Mission) -> List[str]:
             # Ran off the front of the list without meeting either.
             if position < len(steps):
                 warnings.append(
-                    f"steps[{step.index}] navigates before any park_arms or "
+                    f"steps[{step.index}] moves the base before any park_arms or "
                     "check_arms, so the mission assumes the arms are already "
                     "parked when it starts"
                 )

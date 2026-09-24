@@ -75,6 +75,17 @@ class BaseAdapterNode(Node):
         self.declare_parameter("allow_lateral", False)
         self.declare_parameter("require_enable", True)
 
+        # --- crab correction -------------------------------------------------
+        # This chassis does not strafe straight: commanded pure lateral motion
+        # comes out diagonal, and by different amounts each way. The correction
+        # is a linear.x component mixed in proportionally to linear.y, measured
+        # in move_base/move_base.py (-0.025 left, -0.04 right, relative to
+        # |vy| = 1). It belongs here because it is a property of the wheels, and
+        # nothing upstream -- Nav2 or the orchestrator -- can know about it.
+        # Set both to 0.0 to disable.
+        self.declare_parameter("lateral_trim_left", 0.0)
+        self.declare_parameter("lateral_trim_right", 0.0)
+
         get = self.get_parameter
         self.base_cmd_type = str(get("base_cmd_type").value)
         if self.base_cmd_type not in ("Twist", "TwistStamped"):
@@ -86,6 +97,8 @@ class BaseAdapterNode(Node):
         self.max_linear = float(get("max_linear").value)
         self.max_angular = float(get("max_angular").value)
         self.allow_lateral = bool(get("allow_lateral").value)
+        self.lateral_trim_left = float(get("lateral_trim_left").value)
+        self.lateral_trim_right = float(get("lateral_trim_right").value)
         self.require_enable = bool(get("require_enable").value)
 
         message_type = Twist if self.base_cmd_type == "Twist" else TwistStamped
@@ -156,8 +169,12 @@ class BaseAdapterNode(Node):
             self.blocked += 1
             return
         out = Twist()
-        out.linear.x = _clamp(msg.linear.x, self.max_linear)
-        out.linear.y = _clamp(msg.linear.y, self.max_linear) if self.allow_lateral else 0.0
+        lateral = _clamp(msg.linear.y, self.max_linear) if self.allow_lateral else 0.0
+        trim = self.lateral_trim_left if lateral > 0.0 else self.lateral_trim_right
+        # Clamp after the trim, not before: the correction must not be what
+        # pushes the axial component over the limit.
+        out.linear.x = _clamp(msg.linear.x + trim * abs(lateral), self.max_linear)
+        out.linear.y = lateral
         out.angular.z = _clamp(msg.angular.z, self.max_angular)
         if not self.allow_lateral and abs(msg.linear.y) > 1e-3:
             self.get_logger().warning(

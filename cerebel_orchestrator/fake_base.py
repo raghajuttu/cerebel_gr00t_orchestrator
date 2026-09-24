@@ -6,6 +6,13 @@ drives and reports arrival against a robot that cannot hurt anybody, which is
 enough to check the station poses, the goal tolerances, the interlock heartbeat
 and the whole mission sequence before any of it reaches hardware.
 
+It also publishes ``/all_wheel_rpm``, which is what the real chassis offers and
+all it offers -- four wheel speeds, no pose. That is what ``move_base`` steps
+integrate, so a mission that drives by wheel arc can be rehearsed here too. The
+conversion is the inverse of the real thing: speed over the ground divided by
+the wheel perimeter, published on all four wheels with the sign pattern the
+vendor driver uses.
+
 It is a perfect actuator: it goes exactly where it is told at exactly the
 commanded velocity. Real wheels slip, and a mission that only works here is not
 validated -- it is rehearsed.
@@ -21,6 +28,13 @@ import rclpy
 from geometry_msgs.msg import Quaternion, Twist, TwistStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from std_msgs.msg import Float64MultiArray
+
+from .base_move import WHEEL_PERIMETER_M
+
+# move_base.py's params.yaml value. Only used to turn a commanded spin into
+# a plausible wheel speed; the mover never sees it.
+CHASSIS_RADIUS_M = 0.0875
 from tf2_ros import TransformBroadcaster
 
 
@@ -33,6 +47,7 @@ class FakeBaseNode(Node):
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("rate_hz", 50.0)
+        self.declare_parameter("wheel_rpm_topic", "/all_wheel_rpm")
         self.declare_parameter("holonomic", False)
         self.declare_parameter("start_x", 0.0)
         self.declare_parameter("start_y", 0.0)
@@ -51,6 +66,9 @@ class FakeBaseNode(Node):
         message_type = Twist if str(get("cmd_type").value) == "Twist" else TwistStamped
         self.create_subscription(message_type, str(get("cmd_topic").value), self._on_cmd, 10)
         self._odom_pub = self.create_publisher(Odometry, str(get("odom_topic").value), 10)
+        self._rpm_pub = self.create_publisher(
+            Float64MultiArray, str(get("wheel_rpm_topic").value), 10
+        )
         self._tf = TransformBroadcaster(self)
 
         self.period = 1.0 / max(float(get("rate_hz").value), 1.0)
@@ -66,6 +84,21 @@ class FakeBaseNode(Node):
         self.vx = float(twist.linear.x)
         self.vy = float(twist.linear.y) if self.holonomic else 0.0
         self.wz = float(twist.angular.z)
+
+    def _publish_wheel_rpm(self) -> None:
+        """What the real chassis publishes: four speeds, and nothing about pose.
+
+        The magnitude is the one that matters -- ``BaseMover`` takes the mean of
+        the absolute values, because the real driver's signs are inconsistent
+        between translation and rotation. The sign pattern here mirrors the
+        vendor's [+1, -1, -1, -1] so that anything reading the raw array sees
+        the shape it will see on hardware.
+        """
+        speed = math.hypot(self.vx, self.vy) + abs(self.wz) * CHASSIS_RADIUS_M
+        rpm = speed / WHEEL_PERIMETER_M * 60.0
+        message = Float64MultiArray()
+        message.data = [rpm, -rpm, -rpm, -rpm]
+        self._rpm_pub.publish(message)
 
     def _tick(self) -> None:
         dt = self.period
@@ -89,6 +122,8 @@ class FakeBaseNode(Node):
         odom.twist.twist.linear.x = self.vx
         odom.twist.twist.linear.y = self.vy
         odom.twist.twist.angular.z = self.wz
+
+        self._publish_wheel_rpm()
         self._odom_pub.publish(odom)
 
         transform = TransformStamped()

@@ -21,8 +21,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
-from launch.conditions import IfCondition
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -77,6 +81,23 @@ def _setup(context, *_args, **_kwargs):
     if park_poses:
         overrides["park_poses_file"] = park_poses
 
+    # Nav2 is only worth starting for a mission that actually navigates. A
+    # `move_base` mission drives the base by wheel-arc integration instead, and
+    # on a chassis with no odometry and no odom->base_link transform Nav2 would
+    # not merely idle -- its costmaps and controller would log a TF error every
+    # cycle. So the launch argument gates it and the mission has a veto.
+    wants_nav2 = get("use_nav2") == "true"
+    actions = []
+    if wants_nav2 and not _mission_navigates(mission):
+        wants_nav2 = False
+        actions.append(
+            LogInfo(
+                msg=f"use_nav2 was true but {os.path.basename(mission)} has no "
+                "navigate steps -- not starting Nav2. Pass use_nav2:=false to "
+                "silence this."
+            )
+        )
+
     nodes = [
         Node(
             package=PACKAGE,
@@ -94,23 +115,37 @@ def _setup(context, *_args, **_kwargs):
             parameters=[params, overrides],
         ),
     ]
-    return nodes
+    if wants_nav2:
+        actions.append(
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(share, "launch", "nav2_no_slam.launch.py")
+                ),
+                launch_arguments={
+                    "kinematics": get("kinematics"),
+                    "use_velocity_smoother": get("use_velocity_smoother"),
+                }.items(),
+            )
+        )
+    return actions + nodes
+
+
+def _mission_navigates(path: str) -> bool:
+    """Does this mission have a `navigate` step? Parsed, not grepped.
+
+    A failure to read the mission here is not a launch failure -- the
+    orchestrator node will report it properly a moment later, with the
+    validator's message. Assume Nav2 is wanted and let that happen.
+    """
+    try:
+        from cerebel_orchestrator.mission import Mission
+
+        return any(step.kind == "navigate" for step in Mission.load(path).steps)
+    except Exception:
+        return True
 
 
 def generate_launch_description() -> LaunchDescription:
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory(PACKAGE), "launch", "nav2_no_slam.launch.py"
-            )
-        ),
-        launch_arguments={
-            "kinematics": LaunchConfiguration("kinematics"),
-            "use_velocity_smoother": LaunchConfiguration("use_velocity_smoother"),
-        }.items(),
-        condition=IfCondition(LaunchConfiguration("use_nav2")),
-    )
-
     return LaunchDescription(
         [
             DeclareLaunchArgument("mission", description="mission name or path"),
@@ -143,9 +178,8 @@ def generate_launch_description() -> LaunchDescription:
                 description="let park_arms actually move the arms",
             ),
             DeclareLaunchArgument("use_nav2", default_value="true"),
-            DeclareLaunchArgument("kinematics", default_value="diff_drive"),
+            DeclareLaunchArgument("kinematics", default_value="holonomic"),
             DeclareLaunchArgument("use_velocity_smoother", default_value="false"),
-            nav2,
             OpaqueFunction(function=_setup),
         ]
     )
