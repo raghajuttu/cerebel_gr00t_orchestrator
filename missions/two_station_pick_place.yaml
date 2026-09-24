@@ -1,3 +1,17 @@
+# =============================================================================
+# DO NOT RUN THIS AGAINST THE pick_scan_place CHECKPOINT.
+#
+# This mission is from the earlier green-cube task. Its task_description is
+# "pick up the green cube and place it in the box", which is NOT one of the four
+# annotations in 20260923_pick_and_scan_and_place_01 -- so that checkpoint has
+# never been conditioned on this string and what it would do is undefined, not
+# "a pick".
+#
+# It is kept because it is the worked example of a pick-and-carry mission with
+# Nav2 base motion. For the current task use pick_then_place or
+# three_station_kit, whose prompts are verified against meta/tasks.jsonl.
+# =============================================================================
+
 # Autonomous pick-and-place across two stations, one base move apart.
 #
 # The shape of the task:
