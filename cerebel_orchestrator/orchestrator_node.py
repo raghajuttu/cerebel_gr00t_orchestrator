@@ -234,7 +234,7 @@ class OrchestratorNode(Node):
             self.create_subscription(
                 Float64MultiArray,
                 topic,
-                lambda msg, side=side: self.holder.observe(side, msg.data, self._now()),
+                lambda msg, side=side: self._on_arm_command(side, msg),
                 10,
             )
 
@@ -286,6 +286,9 @@ class OrchestratorNode(Node):
         # next one longer rather than shifting every position after it.
         self._axis_cm: Optional[float] = None
         self._wheel_rpm_seen = False
+        # When a policy phase ended, so the gap to the NEXT client's first arm
+        # command can be reported. That gap is the switch, as the arm sees it.
+        self._switch_began: Optional[float] = None
         self._monitor: Optional[PhaseMonitor] = None
         self._phase_started: float = 0.0
         self._estop = False
@@ -427,6 +430,27 @@ class OrchestratorNode(Node):
         return any(step.kind == "navigate" for step in self.mission.steps)
 
     # -- subscriptions -------------------------------------------------------
+
+    def _on_arm_command(self, side: str, msg: Float64MultiArray) -> None:
+        """Feed the hold, and time the switch.
+
+        The first command a new client publishes is the moment the arm is
+        someone's responsibility again, so the gap from the previous phase
+        ending to here is the switch as the arm experiences it -- not as the
+        process table sees it.
+        """
+        spoke_before = self.holder.client_spoke
+        self.holder.observe(side, msg.data, self._now())
+        if (
+            self._switch_began is not None
+            and not spoke_before
+            and self.holder.client_spoke
+        ):
+            self.get_logger().info(
+                f"    switch took {self._now() - self._switch_began:.2f}s "
+                "from the last phase ending to the new client's first command"
+            )
+            self._switch_began = None
 
     def _on_wheel_rpm(self, msg: Float64MultiArray) -> None:
         """Fold one wheel sample into the mover. Decides nothing.
@@ -779,6 +803,7 @@ class OrchestratorNode(Node):
     def _end_action(self, action: Action, ok: bool, reason: str) -> None:
         if action.kind == "run_policy":
             self.policies.stop(f"phase over: {reason}")
+            self._switch_began = self._now()
         elif action.kind == "move_base":
             # Book the distance actually achieved, whether the move succeeded or
             # not: a failed move still moved the robot, and the next step's

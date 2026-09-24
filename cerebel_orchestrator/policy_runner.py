@@ -298,6 +298,7 @@ class PolicyRunner:
             return
 
         process = session.process
+        stop_began = time.monotonic()
         self.log.info(f"stopping policy {session.policy.name} (pid {process.pid}): {reason}")
         for sig, grace in (
             (signal.SIGINT, self.config.sigint_grace_s),
@@ -315,9 +316,11 @@ class PolicyRunner:
             )
             self._signal_group(process, signal.SIGKILL)
             self._wait(process, 2.0)
+        # Two different durations, and the switch cost is the second one.
         self.log.info(
             f"policy {session.policy.name} stopped with code {process.poll()} "
-            f"after {time.monotonic() - session.started_at:.1f}s"
+            f"after {time.monotonic() - session.started_at:.1f}s "
+            f"(shutdown took {time.monotonic() - stop_began:.2f}s)"
         )
         self._release(session)
 
