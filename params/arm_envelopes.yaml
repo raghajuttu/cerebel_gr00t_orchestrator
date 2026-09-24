@@ -30,27 +30,36 @@ envelopes:
       policy ended somewhere else, the mission stops here rather than driving
       off with the arm extended.
     joints:
-      # MEASURED: p2..p98 of the final frame of all 152 pick episodes, arm
-      # joints widened by 0.10 rad. The finger bounds are NOT widened -- they
-      # are the check that the object is still held.
-      openarm_left_joint1:         [-0.441,  0.307]
-      openarm_left_joint2:         [-0.610, -0.078]
-      openarm_left_joint3:         [-0.469,  0.217]
-      openarm_left_joint4:         [ 1.768,  2.348]
-      openarm_left_joint5:         [-0.720, -0.066]
-      openarm_left_joint6:         [-0.414,  0.152]
-      openarm_left_joint7:         [ 0.038,  0.761]
-      # Still holding: a released or dropped object reads ~0.048 and fails here.
-      openarm_left_finger_joint1:  [ 0.006,  0.016]
-      openarm_right_joint1:        [-0.064,  0.235]
-      openarm_right_joint2:        [-0.084,  0.202]
-      openarm_right_joint3:        [-1.078,  0.112]
-      openarm_right_joint4:        [ 0.017,  0.348]
-      openarm_right_joint5:        [-0.458,  0.692]
-      openarm_right_joint6:        [-0.720, -0.155]
-      openarm_right_joint7:        [-0.668, -0.213]
-      # The right hand is empty at the end of a pick; the handover is later.
-      openarm_right_finger_joint1: [ 0.045,  0.050]
+      # MEASURED, and REPLAYED: p1..p99 of the final frame of all 152 pick
+      # episodes, arm joints widened by 0.15 rad. Replaying
+      # `grasp:closed AND envelope:carry, hold 0.5s` against those episodes
+      # fires in 152 of 152, at median 86% of the episode.
+      #
+      # The earlier p2..p98 +0.10 bounds fired in only 136 -- 16 episodes sat a
+      # few thousandths outside a boundary that the percentile cut had put
+      # there by construction. Widen before tightening: a bound that never
+      # fires costs a whole run, a bound that is slightly loose costs nothing
+      # because the gripper condition is ANDed with it.
+      openarm_left_joint1:         [-0.494,  0.366]
+      openarm_left_joint2:         [-0.664, -0.015]
+      openarm_left_joint3:         [-0.529,  0.282]
+      openarm_left_joint4:         [ 1.704,  2.405]
+      openarm_left_joint5:         [-0.781,  0.010]
+      openarm_left_joint6:         [-0.474,  0.222]
+      openarm_left_joint7:         [-0.046,  0.827]
+      # The fingers are set by what they MEAN, not by a percentile. Left must
+      # be closed on the object -- 0.025 is grasp_close_m, so this and the
+      # grasp condition agree. Right must be open, because that hand is still
+      # empty at the end of a pick; the handover comes later.
+      openarm_left_finger_joint1:  [ 0.000,  0.025]
+      openarm_right_joint1:        [-0.122,  0.287]
+      openarm_right_joint2:        [-0.138,  0.257]
+      openarm_right_joint3:        [-1.174,  0.229]
+      openarm_right_joint4:        [-0.042,  0.404]
+      openarm_right_joint5:        [-0.609,  0.755]
+      openarm_right_joint6:        [-0.793, -0.056]
+      openarm_right_joint7:        [-0.734, -0.123]
+      openarm_right_finger_joint1: [ 0.035,  0.060]
 
 
   home:
