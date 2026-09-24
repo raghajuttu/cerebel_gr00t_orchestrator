@@ -11,11 +11,13 @@
 #   object and holds it  ->  the place policy starts FROM THERE, hands over to
 #   the right arm, presents it to the scanner and puts it in the box.
 #
-# **THE ORCHESTRATOR COMMANDS NO ACTUATOR IN THIS MISSION.** No park ramp
-# (there is no park step, and enable_park is false), no arm hold
-# (hold_arms_between_policies is false), no base. It starts one inference
-# client, watches the gripper, stops it, and starts the next. Every joint that
-# moves is moved by a policy.
+# **THE ORCHESTRATOR COMMANDS NOTHING WHILE THE TASK IS RUNNING.** No arm hold
+# (hold_arms_between_policies is false), no base. Through the pick, the switch
+# and the place, every joint that moves is moved by a policy.
+#
+# The one exception is the LAST step, a park ramp back to rest -- and it is off
+# by default (enable_park is false). It exists because the policy cannot do it:
+# see the note on that step.
 #
 # **There is deliberately nothing between the two policies.** No park, no
 # check_arms, no wait. The place policy's first observation has to be the pick
@@ -95,14 +97,12 @@ policies:
     params: *policy_params
 
 steps:
-  # NO park step. The pick episodes all start from the arms' rest pose, which is
-  # where they already are, so there is nothing for the orchestrator to do --
-  # and this mission is deliberately the one where the orchestrator commands no
-  # actuator at all. It starts a policy, watches the gripper, stops the policy,
-  # starts the next one. That is the whole test.
+  # No park at the START. The pick episodes all begin from the arms' rest pose,
+  # which is where they already are, so there is nothing to do -- and it keeps
+  # the orchestrator out of the way of the thing being tested.
   #
-  # Put `- {step: park_arms, profile: ready}` back, and set enable_park: true,
-  # once the switch itself is proven and you want the arms placed repeatably.
+  # Add `- {step: park_arms, profile: home}` here if you want the arms placed
+  # repeatably before each run rather than left wherever the last one ended.
 
   # HOW THIS PHASE ENDS: the object is held AND the arm has lifted it clear.
   #
@@ -172,8 +172,30 @@ steps:
     # past the release -- an item that was scanned and then dropped on the
     # floor still fails.
 
-  # Confirm both hands are empty and the arms are where they should be. This is
-  # the check that says the object went in the box rather than onto the floor.
+  # Confirm both hands are empty. This is the check that says the object went
+  # in the box rather than onto the floor.
   - {step: check_arms, envelope: travel, seconds: 5.0}
+
+  # Bring the arms back to rest.
+  #
+  # THE POLICY CANNOT DO THIS. Measured against all 150 place episodes: the
+  # phase ends 0.656 rad from rest at its worst joint, and the episode's own
+  # last frame is 0.656 rad out too -- the condition fires exactly where the
+  # demonstration stops. Recording ended while the demonstrator was still
+  # bringing the arms back, so the return is not in the data and the policy was
+  # never shown it.
+  #
+  # So the orchestrator does it: a joint-space ramp to the measured rest pose,
+  # deterministic, no policy involved.
+  #
+  # GATED BY enable_park, which is FALSE by default -- this step reports success
+  # without moving until you turn it on. Do that only when you are ready to
+  # watch the first park: the ramp has never run on this hardware, it moves both
+  # arms at max_joint_speed (0.15 rad/s), and it is the one thing in this
+  # mission the orchestrator commands itself.
+  #
+  #     ros2 launch ... mission:=pick_then_place use_nav2:=false enable_park:=true
+  - {step: park_arms, profile: home}
+  - {step: check_arms, envelope: home, seconds: 5.0}
 
 repeat: 1

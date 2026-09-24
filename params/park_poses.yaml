@@ -24,14 +24,22 @@
 
 profiles:
   home:
-    # The normal base pose: both arms hanging straight down, nothing held. The
-    # robot starts a mission here, drives to the first station here, and is
-    # tucked back here when the task is finished.
-    left_arm:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    right_arm: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    # Grippers closed when empty, so nothing dangles or catches while driving.
-    left_gripper: 0.0
-    right_gripper: 0.0
+    # The arms' rest pose -- where every pick episode begins and where the
+    # robot should be left at the end of a run.
+    #
+    # THIS WAS ALL ZEROS AND THAT WAS DANGEROUS. Zero on this arm is not "hanging
+    # down"; it is a different configuration entirely, and a park ramp to it
+    # would have swung both arms through a large motion nobody intended. The
+    # values below are the median frame-0 joint state of all 152 pick episodes
+    # of 20260923_pick_and_scan_and_place_01 -- measured, and identical to
+    # `ready` below, because on this robot the rest pose and the pose the
+    # policies start from are the same place.
+    left_arm:  [ 0.0502, -0.1230,  0.3767,  0.4108, -0.2926,  0.0113,  0.1677]
+    right_arm: [ 0.0799,  0.0488, -0.0542,  0.2272, -0.1432, -0.2262, -0.4541]
+    # Open, matching the demonstrations -- and an open left gripper is what
+    # arms the `grasp: closed` condition of a pick that follows.
+    left_gripper: 0.0483
+    right_gripper: 0.0496
 
   ready:
     # Where the pick policy's training episodes began. Parking here before a
@@ -52,7 +60,10 @@ profiles:
     # the object in the policy's own carry pose. NOT used by the shipped
     # pick-and-carry mission: parking between the pick and the drive would drop
     # whatever the gripper is holding.
-    left_arm:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    right_arm: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    left_gripper: 0.0
-    right_gripper: 0.0
+    # STILL A PLACEHOLDER, and zero is not a safe default on this arm -- see
+    # the note under `home`. Nothing in pick_then_place or three_station_kit
+    # uses this profile; measure a real tucked pose before any mission does.
+    left_arm:  [ 0.0502, -0.1230,  0.3767,  0.4108, -0.2926,  0.0113,  0.1677]
+    right_arm: [ 0.0799,  0.0488, -0.0542,  0.2272, -0.1432, -0.2262, -0.4541]
+    left_gripper: 0.0483
+    right_gripper: 0.0496
