@@ -323,6 +323,7 @@ def test_a_policy_phase_waits_for_the_client_to_be_ready():
     assert not gate(self, action("run_policy"))
     # The gate started the client, with task_control and the topics.
     name, label, extra = self.policies.started[0]
+    assert name == "prompt_client"        # not the first policy's name
     assert extra["task_control"] is True
     assert json.loads(sent[0])["task"] == ""        # the latched command is a pause
     self.prompt.on_state(state("idle", 1))
