@@ -25,6 +25,12 @@ from launch_ros.actions import Node
 
 PACKAGE = "cerebel_orchestrator"
 
+# Every flag is checked by launch itself. Unchecked, `use_nav2:=falseenable_park:=true`
+# (a missing space) set use_nav2 to that whole string and left enable_park at
+# its default -- silently, on hardware, 2026-09-28.
+BOOL = ["true", "false"]
+KINEMATICS = ["holonomic", "diff_drive"]
+
 LIFECYCLE_NODES = [
     "controller_server",
     "planner_server",
@@ -136,6 +142,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "kinematics",
                 default_value="diff_drive",
+                choices=KINEMATICS,
                 description="diff_drive or holonomic -- picks the parameter file",
             ),
             DeclareLaunchArgument(
@@ -146,11 +153,13 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "use_velocity_smoother",
                 default_value="false",
+                choices=BOOL,
                 description="insert nav2_velocity_smoother between the controller and the base",
             ),
             DeclareLaunchArgument(
                 "publish_map_frame",
                 default_value="true",
+                choices=BOOL,
                 description="publish an identity map -> odom transform for RViz",
             ),
             OpaqueFunction(function=_setup),
