@@ -577,6 +577,17 @@ class Mission:
     # anchored -- and it is an assertion about the world, not a measurement.
     start_position: Optional[str] = None
     repeat: int = 1
+    # How one policy phase hands over to the next. "process": stop the client
+    # and start a new one per phase (the validated behaviour). "prompt": one
+    # client for the whole mission, the prompt switched at runtime
+    # (adibot_gr00t_client task_control) -- only possible when every policy
+    # is the same checkpoint with the same client parameters.
+    policy_switching: str = "process"
+    # prompt mode only. True: the old prompt's plan keeps running while the
+    # new prompt's first chunk is requested, and RTC stitches the two -- the
+    # arm never stops. False: the old prompt is paused at the phase end and
+    # the new one starts from rest, as the demonstrations did.
+    prompt_blend: bool = True
 
     @staticmethod
     def from_dict(raw: Any) -> "Mission":
@@ -591,6 +602,8 @@ class Mission:
             "policies",
             "steps",
             "repeat",
+            "policy_switching",
+            "prompt_blend",
         }
         _require(not unknown, "mission", f"unknown top-level keys {sorted(unknown)}")
         _require("steps" in raw, "mission", "missing steps")
@@ -669,6 +682,17 @@ class Mission:
                 "starts -- every move distance is measured from it",
             )
 
+        switching = str(raw.get("policy_switching", "process"))
+        _require(
+            switching in SWITCHING_MODES,
+            "mission.policy_switching",
+            f"must be one of {list(SWITCHING_MODES)}, not {switching!r}",
+        )
+        blend = raw.get("prompt_blend", True)
+        _require(isinstance(blend, bool), "mission.prompt_blend", "must be true or false")
+        if switching == "prompt":
+            check_prompt_switching(policies, steps)
+
         return Mission(
             name=str(raw.get("name", "unnamed")),
             frame_id=str(raw.get("frame_id", "odom")),
@@ -679,6 +703,8 @@ class Mission:
             policies=policies,
             steps=steps,
             repeat=repeat,
+            policy_switching=switching,
+            prompt_blend=blend,
         )
 
     @staticmethod
@@ -702,6 +728,66 @@ class Mission:
         for policy in self.policies.values():
             grouped.setdefault(f"{policy.server_host}:{policy.server_port}", []).append(policy.name)
         return grouped
+
+    def used_policies(self) -> List[Policy]:
+        """The policies a run_policy step actually runs, in step order."""
+        seen: Dict[str, Policy] = {}
+        for step in self.steps:
+            if step.kind == "run_policy" and step.policy not in seen:
+                seen[str(step.policy)] = self.policies[str(step.policy)]
+        return list(seen.values())
+
+
+SWITCHING_MODES = ("process", "prompt")
+
+# Client parameters the orchestrator sets itself in prompt mode.
+PROMPT_RESERVED_PARAMS = frozenset(
+    {"task_control", "task_command_topic", "task_state_topic", "task_description"}
+)
+
+
+def check_prompt_switching(policies: Dict[str, Policy], steps: List[Step]) -> None:
+    """One client serves every phase, so every phase must want the same client.
+
+    The only thing a prompt switch changes is the language instruction. A
+    policy on another server (another checkpoint) or with different client
+    parameters cannot be reached by switching a prompt, and running it with
+    the first policy's settings would be silently wrong.
+    """
+    used = []
+    for step in steps:
+        if step.kind == "run_policy" and step.policy in policies:
+            if policies[str(step.policy)] not in used:
+                used.append(policies[str(step.policy)])
+    if not used:
+        return
+    first = used[0]
+    for policy in used[1:]:
+        for label, mine, theirs in (
+            ("server_host", policy.server_host, first.server_host),
+            ("server_port", policy.server_port, first.server_port),
+            ("checkpoint_label", policy.checkpoint_label, first.checkpoint_label),
+            ("params", policy.params, first.params),
+        ):
+            _require(
+                mine == theirs,
+                f"policies.{policy.name}",
+                f"policy_switching: prompt runs every phase on ONE client, but "
+                f"{label} differs from {first.name!r} ({mine!r} vs {theirs!r}). "
+                "Only task_description may differ; use policy_switching: process "
+                "for a different checkpoint or different client parameters.",
+            )
+    reserved = sorted(PROMPT_RESERVED_PARAMS & set(first.params))
+    _require(
+        not reserved,
+        f"policies.{first.name}.params",
+        f"{reserved} are set by the orchestrator in prompt mode",
+    )
+    _require(
+        first.params.get("prefetch_enable", True) is True,
+        f"policies.{first.name}.params",
+        "prompt switching needs prefetch_enable: true (the client refuses otherwise)",
+    )
 
 
 def navigate_safety_warnings(mission: Mission) -> List[str]:
@@ -801,6 +887,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         print(f"OK   {path}")
         print(f"     name={mission.name} frame={mission.frame_id} repeat={mission.repeat}")
+        if mission.policy_switching == "prompt":
+            print(f"     policy switching: prompt (one client, "
+                  f"{'blended' if mission.prompt_blend else 'pause then start'})")
         print(f"     stations: {', '.join(sorted(mission.stations)) or 'none'}")
         for address, names in sorted(mission.policy_ports().items()):
             shared = "  <-- one checkpoint, several prompts" if len(names) > 1 else ""
