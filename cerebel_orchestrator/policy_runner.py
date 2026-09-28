@@ -44,6 +44,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -116,6 +117,8 @@ class RunnerConfig:
     sigint_grace_s: float = 5.0
     sigterm_grace_s: float = 3.0
     startup_grace_s: float = 20.0
+    # Stop the client if this node dies. See client_guard.py.
+    guard_client: bool = True
     # Run before every client start. Empty disables it. See the module docstring.
     prepare_cmd: List[str] = field(default_factory=list)
     prepare_timeout_s: float = 15.0
@@ -158,6 +161,24 @@ class PolicyRunner:
         for name, value in params.items():
             argv += ["-p", f"{name}:={yaml_scalar(value)}"]
         return argv
+
+    def guarded(self, argv: List[str]) -> List[str]:
+        """Wrap ``argv`` in client_guard, so the client dies if this node does.
+
+        Without it, a client orphaned by the orchestrator being SIGKILLed keeps
+        driving the arms forever. POSIX only -- there are no process groups to
+        guard on Windows, which is only ever a desk machine.
+        """
+        if os.name != "posix" or not self.config.guard_client:
+            return list(argv)
+        return [
+            sys.executable,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "client_guard.py"),
+            "--parent", str(os.getpid()),
+            "--sigint-grace", repr(self.config.sigint_grace_s),
+            "--sigterm-grace", repr(self.config.sigterm_grace_s),
+            "--",
+        ] + list(argv)
 
     def prepare(self) -> Optional[str]:
         """Re-initialise the arm controller. Returns an error string, or None.
@@ -227,9 +248,10 @@ class PolicyRunner:
         handle.flush()
 
         # start_new_session puts the client in its own process group, so a stop
-        # signals the client and anything it spawned, and never this node.
+        # signals the client and anything it spawned, and never this node. The
+        # guard ties the client's life back to ours: see client_guard.py.
         process = subprocess.Popen(
-            argv,
+            self.guarded(argv),
             stdout=handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
