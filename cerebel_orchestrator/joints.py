@@ -1,12 +1,12 @@
 """The robot's canonical 16-DOF layout, mirrored from the inference client.
 
 This is the authoritative order used by the recorder, the dataset, the GR00T
-checkpoint and ``adibot_gr00t_client``. ``/joint_states`` arrives scrambled and
+checkpoint and the inference client. ``/joint_states`` arrives scrambled and
 must be reordered **by name** into this order before any index below means
 anything.
 
 Keep this list byte-identical to ``CANONICAL_JOINT_ORDER`` in
-``adibot_gr00t_client/inference_client_node.py``. If the two ever disagree, the
+``gr00t_client/inference_client_node.py``. If the two ever disagree, the
 orchestrator will read a different joint than the policy commands, and a grasp
 check will pass on the wrong finger.
 """
