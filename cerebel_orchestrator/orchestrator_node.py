@@ -744,9 +744,7 @@ class OrchestratorNode(Node):
         if action is None:
             return
         if self._current is None or self._current is not action:
-            if not self._prompt_gate(action):
-                return
-            self._start_action(action)
+            self._start_pending()
             return
 
         outcome = self._check_action(action)
@@ -754,6 +752,23 @@ class OrchestratorNode(Node):
             return
         ok, reason = outcome
         self._end_action(action, ok, reason)
+        # Start the next step now, not on the next tick. At a policy switch the
+        # tick was 100 ms of the next phase not having begun -- measured on
+        # hardware as 0.34-0.42 s from phase end to first command, of which
+        # 0.1 s was this wait. A step that cannot start yet (the prompt gate
+        # waiting for a pause to be acknowledged) is simply retried next tick.
+        self._start_pending()
+
+    def _start_pending(self) -> None:
+        """Start the runner's pending action, if there is one and it may start."""
+        if self.runner.terminal or self.runner.held:
+            return
+        action = self.runner.pending()
+        if action is None or self._current is action:
+            return
+        if not self._prompt_gate(action):
+            return
+        self._start_action(action)
 
     def _publish_gate(self) -> None:
         """The base may move only while a navigate step is actually in flight."""
