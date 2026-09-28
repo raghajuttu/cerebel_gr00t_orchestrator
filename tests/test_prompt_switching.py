@@ -470,3 +470,22 @@ def test_nothing_starts_after_the_last_step():
     Node._supervisor_tick(self)
     assert self.started == [last]
     assert self.runner.terminal
+
+
+# -- shutdown ------------------------------------------------------------------
+
+
+def test_the_client_is_stopped_even_when_the_pause_cannot_be_sent():
+    """Hardware, 2026-09-28: after Ctrl-C the ROS context was gone, the pause
+    publish raised, and the stop after it never ran."""
+    def dead_publish(_text):
+        raise RuntimeError("Failed to publish: publisher's context is invalid")
+
+    self = types.SimpleNamespace()
+    self.prompt = PromptClient(dead_publish, Clock())
+    self.policies = _Policies()
+    self.policies.running = True
+    for name in ("nav", "mover", "parker"):
+        setattr(self, name, types.SimpleNamespace(cancel=lambda *a: None))
+    Node._stop_activity(self, "node shutdown")
+    assert self.policies.stopped == ["node shutdown"]
