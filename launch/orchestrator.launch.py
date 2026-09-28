@@ -33,6 +33,12 @@ from launch_ros.actions import Node
 
 PACKAGE = "cerebel_orchestrator"
 
+# Every flag is checked by launch itself. Unchecked, `use_nav2:=falseenable_park:=true`
+# (a missing space) set use_nav2 to that whole string and left enable_park at
+# its default -- silently, on hardware, 2026-09-28.
+BOOL = ["true", "false"]
+KINEMATICS = ["holonomic", "diff_drive"]
+
 
 def _resolve_mission(share: str, value: str) -> str:
     if not value:
@@ -184,31 +190,38 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "auto_start",
                 default_value="false",
+                choices=BOOL,
                 description="start the mission on launch instead of waiting for ~/start",
             ),
             DeclareLaunchArgument(
                 "dry_run",
                 default_value="false",
+                choices=BOOL,
                 description="shorthand for mock_policy:=true mock_nav:=true",
             ),
             DeclareLaunchArgument(
                 "mock_policy",
                 default_value="false",
+                choices=BOOL,
                 description="run no inference client; the arms stay where they are",
             ),
             DeclareLaunchArgument(
                 "mock_nav",
                 default_value="false",
+                choices=BOOL,
                 description="send no Nav2 goal; a navigate step just succeeds",
             ),
             DeclareLaunchArgument(
                 "enable_park",
                 default_value="false",
+                choices=BOOL,
                 description="let park_arms actually move the arms",
             ),
-            DeclareLaunchArgument("use_nav2", default_value="true"),
-            DeclareLaunchArgument("kinematics", default_value="holonomic"),
-            DeclareLaunchArgument("use_velocity_smoother", default_value="false"),
+            DeclareLaunchArgument("use_nav2", default_value="true", choices=BOOL),
+            DeclareLaunchArgument(
+                "kinematics", default_value="holonomic", choices=KINEMATICS
+            ),
+            DeclareLaunchArgument("use_velocity_smoother", default_value="false", choices=BOOL),
             OpaqueFunction(function=_setup),
         ]
     )
