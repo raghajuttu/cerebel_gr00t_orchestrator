@@ -1,0 +1,132 @@
+# Two items, one base move each way. The next increment after pick_then_place.
+#
+#   position 1  pick the lipstick  ->  place it
+#               park back to rest
+#   38 cm left  ->  position 2  ->  pick the oil
+#   38 cm right ->  position 1  ->  place it
+#               park
+#
+# Three prompts of one checkpoint, two base moves, and the one thing
+# pick_then_place never needed: a park that actually moves.
+#
+# WHY THE PARK IS REQUIRED HERE, not optional as it was before.
+#
+# A place leaves the arms at the `placed` pose. Every pick demonstration BEGINS
+# at the `ready` pose. Those are 0.65 rad apart on right joint5, so a second
+# pick starting from where a place ended begins outside every episode the policy
+# was trained on -- the skill-boundary mismatch this whole design exists to
+# avoid. So: place, park to rest, VERIFY, then pick.
+#
+# enable_park MUST be true:
+#
+#     ros2 launch cerebel_orchestrator orchestrator.launch.py \
+#         mission:=two_item_kit use_nav2:=false enable_park:=true
+#
+# With it false the park steps report success without moving, the `check_arms
+# ready` after each one FAILS, and the mission aborts before the base turns a
+# wheel. That is the intended behaviour -- a silent unparked pick is worse.
+#
+# BEFORE RUNNING, in this order:
+#   1. `move_only` must have worked. Movement first, alone.
+#   2. `pick_then_place` with enable_park:=true must have worked, so the ramp
+#      itself is proven on this hardware before a mission depends on it.
+#   3. The chassis bring-up must be up: `/svtrobot_cmd` with a non-adapter
+#      subscriber, and `/all_wheel_rpm` publishing.
+#   4. Lipstick in tote 1, oil in tote 2. Clear floor between the positions.
+
+name: two_item_kit
+frame_id: odom
+
+positions:
+  position_1: {axis_cm: 0.0}     # tote 1 (lipstick) + scanner + box
+  position_2: {axis_cm: 38.0}    # tote 2 (oil), 38 cm to the LEFT
+
+start_position: position_1
+
+policies:
+  pick_lipstick:
+    task_description: "pick up the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_scan_place"
+    params: &policy_params
+      execution_horizon: 26
+      prefetch_enable: true
+      rtc_enable: true
+      prefetch_lead: 16
+      rtc_overlap_steps: 14
+      rtc_frozen_steps: 10
+      rtc_ramp_rate: 5.0
+      enable_limits: false
+      enable_right_arm: true
+      enable_right_gripper: true
+
+  pick_oil:
+    task_description: "pick up the oil"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_scan_place"
+    params: *policy_params
+
+  place_and_scan:
+    task_description: "scan and place the object"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_scan_place"
+    params: *policy_params
+
+steps:
+  # ---------------- item 1: the lipstick, at position 1 --------------------
+  # MEASURED, 50 lipstick episodes: p95 19.2 s -> 30 s cap. Ends when the object
+  # is held AND the arm has lifted it clear; see pick_then_place for why the
+  # gripper alone fires at 44% of an episode.
+  - step: run_policy
+    policy: pick_lipstick
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    on_fail: abort
+
+  # MEASURED, 150 place episodes: p95 26.4 s -> 55 s cap. Ends when the right
+  # gripper opens after the handover AND both arms are inside the pose a place
+  # ends at AND they have stopped.
+  - step: run_policy
+    policy: place_and_scan
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+
+  # Back to where picks start, and PROVE it. Without this the next pick begins
+  # 0.65 rad out on right joint5.
+  - {step: park_arms, profile: home}
+  - {step: check_arms, envelope: ready, seconds: 8.0, on_fail: abort}
+
+  # ---------------- 38 cm left, to tote 2 ---------------------------------
+  - {step: move_base, to: position_2, on_fail: retry, retries: 1}
+
+  # ---------------- item 2: the oil, at position 2 -------------------------
+  # MEASURED, 50 oil episodes: p95 11.4 s -> 25 s cap. Shorter than the
+  # lipstick's because the oil bottle is a shorter reach.
+  - step: run_policy
+    policy: pick_oil
+    until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    # No park between this pick and the drive home -- ramping the arms would
+    # drop the oil. `ends_parked` is the claim that the pick finishes somewhere
+    # drive-safe, and check_arms is what measures whether it did, including
+    # whether the object is still held.
+    ends_parked: true
+    on_fail: abort
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: abort}
+
+  # ---------------- 38 cm right, carrying the oil -------------------------
+  - {step: move_base, to: position_1, on_fail: retry, retries: 1}
+
+  # ---------------- place item 2 ------------------------------------------
+  - step: run_policy
+    policy: place_and_scan
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+
+  - {step: park_arms, profile: home}
+  - {step: check_arms, envelope: ready, seconds: 8.0}
+
+repeat: 1

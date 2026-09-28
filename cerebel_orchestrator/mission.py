@@ -522,11 +522,18 @@ class Step:
             _require(isinstance(policy, str) and policy, where, "run_policy needs policy")
             until = Until.parse(raw.get("until"), f"{where}.until")
             ends_parked = bool(raw.get("ends_parked", False))
-            if ends_parked and not (until.settled or until.operator):
+            # `envelope` counts, and counts for MORE than `settled` does.
+            # ends_parked claims the policy finishes in a drive-safe pose;
+            # `settled` only says the arms stopped, anywhere, while an envelope
+            # names the pose. This rule predated the envelope condition.
+            if ends_parked and not (
+                until.settled or until.envelope is not None or until.operator
+            ):
                 raise MissionError(
                     f"{where}: ends_parked claims the policy finishes in a "
-                    "drive-safe pose, but until has no `settled` -- without it "
-                    "the phase can end mid-motion and the claim means nothing"
+                    "drive-safe pose, but until has neither `envelope` nor "
+                    "`settled` -- without one of them the phase can end "
+                    "mid-motion and the claim means nothing"
                 )
         elif kind == "park_arms":
             profile = str(raw.get("profile", "travel"))

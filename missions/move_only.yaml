@@ -1,0 +1,69 @@
+# 38 cm left, then 38 cm back. The base, and nothing else.
+#
+# The first movement test, and deliberately the smallest one: no policy, no
+# arms, no gripper. If this does not work, nothing that combines movement with a
+# policy will work either, and it will be much harder to tell why.
+#
+# Out AND back, so the mission is repeatable. `start_position` anchors the axis
+# at position_1, and running this twice from a robot that ended at position_2
+# would drive it another 38 cm left -- so it returns before finishing.
+#
+# BEFORE RUNNING
+#
+#   1. The chassis bring-up must be running. `probe_robot` found NO velocity
+#      command topic when we last looked, which means either the vendor stack
+#      was down or it has no ROS interface at all. Check:
+#
+#          ros2 topic info /svtrobot_cmd
+#          ros2 topic hz /all_wheel_rpm
+#
+#      The first must have a subscriber that is not base_adapter -- that
+#      subscriber IS the chassis driver. The second must be publishing, because
+#      wheel arc is the only feedback a move_base step has.
+#
+#   2. PARK THE ARMS BY HAND, tucked, nothing held. There is no park step here
+#      and enable_park is false, so the arms stay wherever they are and the base
+#      drives with them like that. The mission validator will warn about exactly
+#      this at startup; the warning is correct.
+#
+#   3. Clear floor. There is no lidar and both costmaps would be empty even if
+#      Nav2 were running, which it is not. The only obstacle avoidance in this
+#      configuration is max_linear (0.15 m/s) and someone watching.
+#
+# THE CHASSIS HAS NO COMMAND WATCHDOG. A nonzero twist drives until something
+# sends a zero. base_adapter is what guarantees that zero: it forwards wheel
+# commands only while the orchestrator publishes base_enable, which it does only
+# during a move_base step, and it is fail-closed on a 0.5 s timeout. So the base
+# stops if the orchestrator crashes, is held, or is killed.
+
+name: move_only
+frame_id: odom
+
+# Centimetres along one line, positive to the left. There is no pose and no
+# frame -- see cerebel_orchestrator/base_move.py for why this chassis cannot
+# offer one. `start_position` is an ASSERTION: the robot really must be at
+# position_1 when the mission starts, because nothing can measure that.
+positions:
+  position_1: {axis_cm: 0.0}
+  position_2: {axis_cm: 38.0}
+
+start_position: position_1
+
+policies: {}
+
+steps:
+  # Left 38 cm. The move ends when the wheels have turned 38 cm of arc, scaled
+  # by move_scale_lateral (1.05, measured in move_base/move_base.py -- re-measure
+  # it on this floor). It fails if wheel feedback stops, freezes, or never
+  # arrives.
+  - {step: move_base, to: position_2, on_fail: abort}
+
+  # Long enough to see where it actually stopped and measure the error by hand.
+  # That measurement is the whole point of this mission: it tells you whether
+  # move_scale_lateral is right for this surface.
+  - {step: wait, seconds: 5.0}
+
+  # And back, so the next run starts from the same place.
+  - {step: move_base, to: position_1, on_fail: abort}
+
+repeat: 1

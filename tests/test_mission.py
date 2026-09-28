@@ -198,7 +198,7 @@ def test_a_policy_that_ends_parked_satisfies_the_lint():
     assert lint(CARRY_STEPS) == []
 
 
-def test_ends_parked_without_settled_is_refused():
+def test_ends_parked_with_neither_envelope_nor_settled_is_refused():
     raw = yaml.safe_load(GOOD)
     raw["steps"] = [
         {
@@ -208,7 +208,7 @@ def test_ends_parked_without_settled_is_refused():
             "ends_parked": True,
         }
     ]
-    with pytest.raises(MissionError, match="no `settled`"):
+    with pytest.raises(MissionError, match="neither `envelope` nor `settled`"):
         Mission.from_dict(raw)
 
 
@@ -367,3 +367,31 @@ def test_the_lint_is_quiet_when_a_park_precedes_the_move():
     from cerebel_orchestrator.mission import navigate_safety_warnings
 
     assert navigate_safety_warnings(load(MOVES)) == []
+
+
+def test_ends_parked_is_satisfied_by_an_envelope():
+    """An envelope NAMES the finishing pose, which is a stronger claim than
+    `settled` -- that only says the arms stopped somewhere."""
+    good = MOVES.replace(
+        "  - {step: move_base, to: p2}",
+        "  - step: run_policy\n"
+        "    policy: grab\n"
+        "    ends_parked: true\n"
+        "    until: {timeout_s: 30, grasp: closed, side: left, envelope: carry}\n"
+        "  - {step: move_base, to: p2}",
+    )
+    mission = load(good)
+    assert mission.steps[1].ends_parked
+    assert mission.steps[1].until.envelope == "carry"
+
+
+def test_ends_parked_still_needs_one_of_them():
+    with pytest.raises(MissionError, match="neither `envelope` nor `settled`"):
+        load(
+            MOVES.replace(
+                "  - {step: move_base, to: p2}",
+                "  - {step: run_policy, policy: grab, ends_parked: true, "
+                "until: {timeout_s: 30}}\n"
+                "  - {step: move_base, to: p2}",
+            )
+        )
