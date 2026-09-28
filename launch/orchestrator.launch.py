@@ -86,6 +86,8 @@ def _setup(context, *_args, **_kwargs):
         "mock_policy": dry_run or get("mock_policy") == "true",
         "mock_nav": dry_run or get("mock_nav") == "true",
         "enable_park": get("enable_park") == "true",
+        "policy_switching": get("policy_switching"),
+        "prompt_handover": get("prompt_handover"),
         "arm_envelopes_file": envelopes,
     }
     if park_poses:
@@ -216,6 +218,21 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="false",
                 choices=BOOL,
                 description="let park_arms actually move the arms",
+            ),
+            DeclareLaunchArgument(
+                "policy_switching",
+                default_value="",
+                choices=["", "process", "prompt"],
+                description="override the mission's policy_switching: process "
+                "(one client per phase) or prompt (one client, prompt switched)",
+            ),
+            DeclareLaunchArgument(
+                "prompt_handover",
+                default_value="",
+                choices=["", "blend", "pause"],
+                description="prompt switching only: override the mission's "
+                "prompt_blend -- blend (the old plan runs into the new prompt) "
+                "or pause (stop, then start the new prompt from rest)",
             ),
             DeclareLaunchArgument("use_nav2", default_value="true", choices=BOOL),
             DeclareLaunchArgument(
