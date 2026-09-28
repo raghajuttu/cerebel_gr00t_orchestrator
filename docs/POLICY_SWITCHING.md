@@ -202,13 +202,69 @@ After the client is gone the arms hold their last commanded pose, powered. Nothi
 relaxes them and nothing moves them back. The next step in a well-formed mission
 is `park_arms`.
 
+## Prompt switching: one client for the mission
+
+Everything above is `policy_switching: process`, the default and the validated
+path. Measured on Adibot on 2026-09-28 it costs 0.27 s of shutdown and about
+1.0 s of startup warm (3.8 s on a run's first switch), with nothing commanding
+the arms in between. Almost all of that is process startup, and none of it is
+needed when the two phases are prompts of **one checkpoint**, because the client
+reads its prompt afresh for every request.
+
+`policy_switching: prompt` runs one client (adibot_gr00t_client >= 1.1.0,
+`task_control:=true`) for the whole mission and switches its prompt instead:
+
+```yaml
+policy_switching: prompt     # at the top level of the mission
+prompt_blend: true           # default
+```
+
+or, to A/B the same mission without editing it:
+
+```bash
+ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=pick_then_place \
+    use_nav2:=false policy_switching:=prompt prompt_handover:=pause
+```
+
+What changes:
+
+* **The client starts with the mission**, before step 0, and the first phase
+  waits for it to report ready. The cold start is paid once, outside any phase.
+* **Policy -> policy** is a prompt switch. With `prompt_blend: true` the old
+  prompt's plan keeps executing while the new prompt's first chunk is requested,
+  and RTC seeds that chunk from the plan — the arm does not stop. With
+  `prompt_handover:=pause` (or `prompt_blend: false`) the old prompt is paused at
+  the phase end and the new one starts from rest one round trip later, the way
+  the demonstrations began.
+* **Policy -> anything else** pauses the client at the phase end, and the next
+  step does not start until the client has *acknowledged* the pause. A client
+  that has not acknowledged within `prompt_pause_timeout_s` (1 s; it normally
+  takes one 33 ms tick) is killed, and the step goes ahead. This is what keeps a
+  base move from starting while a policy could still be commanding the arms.
+* **E-stop, hold, abort and the end of the mission** kill the client exactly as
+  process switching does. The next policy phase starts a fresh one.
+* A client that dies between phases is restarted at the next policy phase; one
+  that dies during a phase fails that phase, as before.
+* **One run log** for the mission (`<mission>_prompt_client`), not one per phase.
+  Its sidecar lists every switch in `task_events`.
+
+The mission is refused at load if its policies differ in anything but
+`task_description` — another server, checkpoint label or client parameter can
+only be reached by a new client.
+
+The log reports each switch as the time from the command to the new prompt's
+first chunk executing, and from the end of the previous phase.
+
+**Not validated on hardware yet:** the RTC seam across two different prompts.
+Start with `prompt_handover:=pause`, which never blends, then try `blend` with a
+hand on the e-stop and watch the first second of the place.
+
 ## Two things this does not do
 
-**It does not blend phases.** Each policy phase starts from whatever pose the
-previous one left, with a fresh client and a fresh ZMQ connection. There is no
-continuity of the action chunk across a switch — RTC works *within* a session, not
-across two. If a pick and a place need to flow into each other without a pause,
-that is one policy with one prompt, not two phases.
+**Process switching does not blend phases.** Each policy phase starts from
+whatever pose the previous one left, with a fresh client and a fresh ZMQ
+connection, so RTC cannot carry across the switch. Prompt switching with
+`prompt_blend: true` is the mode that does.
 
 **It does not choose a policy.** Which policy runs where is written in the mission
 file by a human. There is no perception step that decides "this is a cube, use the
