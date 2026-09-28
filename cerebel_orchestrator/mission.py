@@ -216,7 +216,8 @@ class Policy:
     in one mission means two servers on two ports. See docs/POLICY_SWITCHING.md.
 
     ``params`` is passed straight through to the inference client as ROS
-    parameters, so anything in adibot_gr00t_client's ARGUMENTS.md is settable
+    parameters, so any of the client's parameters (groot_deployment's
+    docs/ARGUMENTS.md for v1.0.0, docs/CLIENT_TASK_CONTROL.md here) is settable
     per phase -- execution_horizon, prefetch_enable, rtc_enable, enable_limits,
     limits_file, and the topic names.
     """
@@ -580,7 +581,7 @@ class Mission:
     # How one policy phase hands over to the next. "process": stop the client
     # and start a new one per phase (the validated behaviour). "prompt": one
     # client for the whole mission, the prompt switched at runtime
-    # (adibot_gr00t_client task_control) -- only possible when every policy
+    # (the vendored client's task_control) -- only possible when every policy
     # is the same checkpoint with the same client parameters.
     policy_switching: str = "process"
     # prompt mode only. True: the old prompt's plan keeps running while the
