@@ -1,10 +1,10 @@
 """The orchestrator's half of a prompt-switched inference client.
 
 ``policy_switching: prompt`` runs ONE inference client for the whole mission
-(adibot_gr00t_client with ``task_control:=true``) and switches its prompt at
+(this package's ``gr00t_client`` with ``task_control:=true``) and switches its prompt at
 each policy phase, instead of stopping one client and starting another. The
 client starts idle, takes ``{"epoch", "task"}`` commands, and reports
-``{"state", "epoch", ...}`` back -- see adibot_gr00t_client docs/TASK_CONTROL.md.
+``{"state", "epoch", ...}`` back -- see docs/CLIENT_TASK_CONTROL.md.
 
 This class is the bookkeeping for that conversation, with no ROS in it:
 ``publish`` sends a command string, ``on_state`` takes a state string, and the
