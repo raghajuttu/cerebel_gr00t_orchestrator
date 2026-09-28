@@ -121,7 +121,7 @@ class OrchestratorNode(Node):
 
         # Policies
         self.declare_parameter(
-            "policy_cmd", ["ros2", "run", "adibot_gr00t_client", "inference_client"]
+            "policy_cmd", ["ros2", "run", "cerebel_orchestrator", "inference_client"]
         )
         self.declare_parameter("log_dir", "~/adibot_logs")
         self.declare_parameter("policy_startup_grace_s", 20.0)

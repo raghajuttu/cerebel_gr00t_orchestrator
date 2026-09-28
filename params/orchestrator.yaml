@@ -51,7 +51,7 @@ orchestrator:
     # --ros-args -p ... to this. Change it to point at a different package, or
     # wrap it in `bash -lc "source ...; ros2 run ..."` if the orchestrator is
     # started from an environment that has not sourced the workspace.
-    policy_cmd: ["ros2", "run", "adibot_gr00t_client", "inference_client"]
+    policy_cmd: ["ros2", "run", "cerebel_orchestrator", "inference_client"]   # the vendored client (gr00t_client/)
     log_dir: "~/adibot_logs"
     # How long the client is allowed to take to connect to the policy server
     # before a missing /joint_states counts against it.
