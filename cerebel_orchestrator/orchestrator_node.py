@@ -45,10 +45,17 @@ from .arm_park import ArmParker, load_park_poses
 from .base_move import BaseMoveConfig, BaseMover
 from .envelopes import load_envelopes
 from .joints import reorder_by_name
-from .mission import Mission, MissionError, navigate_safety_warnings
+from .mission import (
+    SWITCHING_MODES,
+    Mission,
+    MissionError,
+    check_prompt_switching,
+    navigate_safety_warnings,
+)
 from .nav_client import NAV2_MISSING, NavClient
 from .phase_monitor import MonitorConfig, PhaseMonitor
 from .policy_preflight import failures, preflight, summary
+from .prompt_client import PromptClient
 from .signal_source import SignalSource
 from .policy_runner import (
     PolicyPrepareError,
@@ -57,6 +64,16 @@ from .policy_runner import (
     describe_command,
 )
 from .state_machine import Action, MissionRunner, Phase
+
+# The prompt client's command and state topics: a command sent before the
+# client subscribed must still reach it, and a state published before this node
+# subscribed must still be seen. Matches adibot_gr00t_client's task_control QoS.
+LATCHED_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 JOINT_STATE_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -116,6 +133,20 @@ class OrchestratorNode(Node):
         # Ping every policy server once, at mission start, before anything moves.
         self.declare_parameter("policy_preflight", True)
         self.declare_parameter("preflight_timeout_ms", 5000)
+        # Prompt switching: one client for the whole mission, its prompt switched
+        # per phase. The mission's policy_switching decides; this overrides it
+        # when set ("process" or "prompt"), for A/B runs on the same mission.
+        self.declare_parameter("policy_switching", "")
+        # "" = the mission's prompt_blend; "blend" or "pause" override it. Words,
+        # not true/false: launch would hand a "true" string over as a YAML bool,
+        # which a string parameter rejects.
+        self.declare_parameter("prompt_handover", "")
+        self.declare_parameter("client_task_topic", "/gr00t_client/task")
+        self.declare_parameter("client_state_topic", "/gr00t_client/task_state")
+        # How long a paused client has to acknowledge before a non-policy step
+        # (a base move) is allowed to start. It stops on its next control tick,
+        # 33 ms; no acknowledgement means it is wedged, and it is killed.
+        self.declare_parameter("prompt_pause_timeout_s", 1.0)
 
         # Phase termination -- measure these off a real run before trusting them
         self.declare_parameter("grasp_close_m", 0.010)
@@ -214,6 +245,7 @@ class OrchestratorNode(Node):
             ),
             self.get_logger(),
         )
+        self._setup_prompt_switching()
         self.parker = ArmParker(
             self,
             poses=load_park_poses(str(get("park_poses_file").value)),
@@ -311,6 +343,48 @@ class OrchestratorNode(Node):
 
     # -- startup -------------------------------------------------------------
 
+    def _setup_prompt_switching(self) -> None:
+        """Decide process vs prompt switching, and wire the prompt client."""
+        get = self.get_parameter
+        override = str(get("policy_switching").value).strip()
+        mode = override or self.mission.policy_switching
+        if mode not in SWITCHING_MODES:
+            raise MissionError(f"policy_switching must be process or prompt, not {mode!r}")
+        if mode == "prompt" and self.mission.policy_switching != "prompt":
+            # The override skips the mission-load check that every phase can
+            # share one client; run it here instead.
+            check_prompt_switching(self.mission.policies, self.mission.steps)
+        if mode == "prompt" and self.mock_policy:
+            self.get_logger().warning(
+                "policy_switching: prompt ignored under mock_policy -- no client to switch"
+            )
+            mode = "process"
+        self.prompt_mode = mode == "prompt" and bool(self.mission.used_policies())
+        handover = str(get("prompt_handover").value).strip().lower()
+        if handover not in ("", "blend", "pause"):
+            raise MissionError(f"prompt_handover must be blend or pause, not {handover!r}")
+        self.prompt_blend = (
+            self.mission.prompt_blend if not handover else handover == "blend"
+        )
+        self.prompt_pause_timeout_s = float(get("prompt_pause_timeout_s").value)
+        self._client_spawned_at: Optional[float] = None
+        self.prompt: Optional[PromptClient] = None
+        if not self.prompt_mode:
+            return
+        self._task_pub = self.create_publisher(
+            String, str(get("client_task_topic").value), LATCHED_QOS
+        )
+
+        def publish(text: str) -> None:
+            message = String()
+            message.data = text
+            self._task_pub.publish(message)
+
+        self.prompt = PromptClient(publish, self._now)
+        self.create_subscription(
+            String, str(get("client_state_topic").value), self._on_client_state, LATCHED_QOS
+        )
+
     def _load_mission(self, path: str) -> Mission:
         if not path:
             raise MissionError("mission_file parameter is empty -- nothing to run")
@@ -371,6 +445,14 @@ class OrchestratorNode(Node):
         log.info(f"  mock policy       : {self.mock_policy}")
         log.info(f"  mock navigation   : {self.mock_nav}")
         log.info(f"  park enabled      : {self.parker.enable}")
+        if self.prompt_mode:
+            log.info(
+                "  policy switching  : PROMPT -- one client for the mission, "
+                + ("the old plan blends into the new prompt"
+                   if self.prompt_blend else "paused at each phase end")
+            )
+        else:
+            log.info("  policy switching  : process -- one client per phase")
         for name, station in sorted(self.mission.stations.items()):
             log.info(f"  station {name:<10}: x={station.x:+.3f} y={station.y:+.3f} yaw={station.yaw:+.3f}")
         for address, names in sorted(self.mission.policy_ports().items()):
@@ -415,6 +497,12 @@ class OrchestratorNode(Node):
                 )
                 return
         self._seed_axis()
+        if self.prompt_mode:
+            # Start the client now, so its cold start happens before the first
+            # step instead of inside the first phase's timeout.
+            self._spawn_prompt_client()
+            if self.runner.terminal:
+                return
         self.get_logger().info(f"mission start ({why})")
         self.runner.start()
 
@@ -470,13 +558,36 @@ class OrchestratorNode(Node):
         spoke_before = self.holder.client_spoke
         self.holder.observe(side, msg.data, self._now())
         if (
-            self._switch_began is not None
+            not self.prompt_mode
+            and self._switch_began is not None
             and not spoke_before
             and self.holder.client_spoke
         ):
             self.get_logger().info(
                 f"    switch took {self._now() - self._switch_began:.2f}s "
                 "from the last phase ending to the new client's first command"
+            )
+            self._switch_began = None
+
+    def _on_client_state(self, msg: String) -> None:
+        if self.prompt is None:
+            return
+        was_ready = self.prompt.ready
+        took = self.prompt.on_state(msg.data)
+        if self.prompt.ready and not was_ready and self._client_spawned_at is not None:
+            self.get_logger().info(
+                f"    prompt client ready {self._now() - self._client_spawned_at:.2f}s "
+                "after starting"
+            )
+        if took is not None:
+            since_phase = (
+                f", {self._now() - self._switch_began:.2f}s after the last phase ended"
+                if self._switch_began is not None
+                else ""
+            )
+            self.get_logger().info(
+                f"    switch: the new prompt's first chunk is executing, "
+                f"{took:.2f}s after the command{since_phase}"
             )
             self._switch_began = None
 
@@ -626,6 +737,8 @@ class OrchestratorNode(Node):
         if action is None:
             return
         if self._current is None or self._current is not action:
+            if not self._prompt_gate(action):
+                return
             self._start_action(action)
             return
 
@@ -714,7 +827,14 @@ class OrchestratorNode(Node):
         if action.kind == "run_policy":
             assert action.policy is not None and action.until is not None
             try:
-                self.policies.start(action.policy, action.run_label)
+                if self.prompt_mode:
+                    assert self.prompt is not None
+                    epoch = self.prompt.activate(action.policy.task_description)
+                    self.get_logger().info(
+                        f"    prompt epoch {epoch}: {action.policy.task_description!r}"
+                    )
+                else:
+                    self.policies.start(action.policy, action.run_label)
             except PolicyPrepareError as exc:
                 # The controller was not re-initialised, so no client started and
                 # nothing has moved. Fail the phase here rather than monitoring
@@ -830,7 +950,10 @@ class OrchestratorNode(Node):
 
     def _end_action(self, action: Action, ok: bool, reason: str) -> None:
         if action.kind == "run_policy":
-            self.policies.stop(f"phase over: {reason}")
+            if self.prompt_mode:
+                self._end_prompt_phase(action)
+            else:
+                self.policies.stop(f"phase over: {reason}")
             self._switch_began = self._now()
         elif action.kind == "move_base":
             # Book the distance actually achieved, whether the move succeeded or
@@ -857,8 +980,99 @@ class OrchestratorNode(Node):
             self.get_logger().error(f"<-- FAILED: {reason}")
         self.runner.report(ok, reason)
 
+    # -- prompt switching ----------------------------------------------------
+
+    def _spawn_prompt_client(self) -> None:
+        assert self.prompt is not None
+        died = self.policies.check()
+        if died is not None:
+            self.get_logger().warning(f"prompt client had exited: {died[1]}")
+        if self.policies.running:
+            return
+        base = self.mission.used_policies()[0]
+        self.prompt.before_spawn()
+        get = self.get_parameter
+        try:
+            self.policies.start(
+                base,
+                f"{self.mission.name}_prompt_client",
+                extra_params={
+                    "task_control": True,
+                    "task_command_topic": str(get("client_task_topic").value),
+                    "task_state_topic": str(get("client_state_topic").value),
+                },
+            )
+        except PolicyPrepareError as exc:
+            # Nothing started and nothing moved; the mission cannot go on.
+            self.runner.fault(f"prompt client not started: {exc}")
+            return
+        self._client_spawned_at = self._now()
+
+    def _prompt_gate(self, action: Action) -> bool:
+        """May ``action`` start yet? Prompt switching only; True otherwise.
+
+        A policy phase waits for the client to be up (ready). Anything else --
+        a base move above all -- waits for the client to have acknowledged a
+        pause, so nothing is commanding the arms when it starts; a client that
+        does not acknowledge within prompt_pause_timeout_s is killed.
+        """
+        if not self.prompt_mode:
+            return True
+        assert self.prompt is not None
+        log = self.get_logger()
+        died = self.policies.check()
+        if died is not None:
+            log.warning(f"prompt client exited between phases: {died[1]}")
+
+        if action.kind == "run_policy":
+            if not self.policies.running:
+                self._spawn_prompt_client()
+            if self.prompt.ready:
+                return True
+            waited = self._now() - (self._client_spawned_at or self._now())
+            if waited > self.policy_startup_grace_s:
+                self.policies.stop("never reported ready")
+                self.runner.fault(
+                    f"prompt client did not report ready within "
+                    f"{self.policy_startup_grace_s:.0f}s -- see its log in log_dir"
+                )
+                return False
+            log.info("    waiting for the prompt client to be ready", throttle_duration_sec=2.0)
+            return False
+
+        if not self.policies.running or self.prompt.is_quiet():
+            return True
+        waiting = self.prompt.pause_waiting_s()
+        if waiting is None:
+            self.prompt.pause()
+            return False
+        if waiting > self.prompt_pause_timeout_s:
+            log.error(
+                f"prompt client did not acknowledge a pause in {waiting:.1f}s -- "
+                "stopping it before the next step"
+            )
+            self.policies.stop("pause not acknowledged")
+            return True
+        return False
+
+    def _end_prompt_phase(self, action: Action) -> None:
+        """A policy phase is over. Keep the client running into the next phase
+        only when that phase is a policy and blending is on; pause otherwise,
+        so the old prompt stops at once rather than at the next step's gate."""
+        assert self.prompt is not None
+        steps = self.mission.steps
+        index = action.step.index
+        next_is_policy = index + 1 < len(steps) and steps[index + 1].kind == "run_policy"
+        if self.prompt_blend and next_is_policy:
+            return
+        self.prompt.pause()
+
     def _stop_activity(self, why: str) -> None:
         """Bring every actuator this node owns to rest, now."""
+        if self.prompt is not None and self.policies.running:
+            # Tell it first -- it stops on its next tick -- then take the
+            # process down regardless, exactly as process switching would.
+            self.prompt.pause()
         if self.policies.running:
             self.policies.stop(why)
         self.nav.cancel(why)
