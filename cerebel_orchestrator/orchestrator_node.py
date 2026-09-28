@@ -1100,7 +1100,14 @@ class OrchestratorNode(Node):
         if self.prompt is not None and self.policies.running:
             # Tell it first -- it stops on its next tick -- then take the
             # process down regardless, exactly as process switching would.
-            self.prompt.pause()
+            # The pause is a courtesy and must never stand in the way of the
+            # stop: after Ctrl-C the ROS context is already gone and publishing
+            # raises, which on hardware (2026-09-28) skipped the stop below and
+            # left the client to client_guard.
+            try:
+                self.prompt.pause()
+            except Exception:  # noqa: BLE001 -- the stop matters, not the message
+                pass
         if self.policies.running:
             self.policies.stop(why)
         self.nav.cancel(why)
