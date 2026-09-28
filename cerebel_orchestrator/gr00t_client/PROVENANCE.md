@@ -27,5 +27,15 @@ git log --oneline -- cerebel_orchestrator/gr00t_client/
 git diff <the commit that added this file> -- cerebel_orchestrator/gr00t_client/
 ```
 
+## Changes since the copy
+
+| Version | Change |
+|---|---|
+| `1.0.0` | verbatim, then imports repointed to `cerebel_orchestrator.gr00t_client` (two lines) |
+| `1.0.0+cerebel.1` | `task_control`: prompts switched at runtime, off by default ([docs/CLIENT_TASK_CONTROL.md](../../docs/CLIENT_TASK_CONTROL.md)) |
+
+The version is stamped into every run's sidecar (`package_version`), so a run
+log says which of these produced it.
+
 **This is a fork, not a mirror.** A fix made in `groot_deployment` does not
 reach this copy unless it is ported by hand, and the other way round.
