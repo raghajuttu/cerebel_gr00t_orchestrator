@@ -306,6 +306,8 @@ def fake_node(blend=True):
     self.policy_startup_grace_s = 20.0
     self.prompt_pause_timeout_s = 1.0
     self._client_spawned_at = None
+    self._run_stamp = "20260928_174335"
+    self._log_label = types.MethodType(Node._log_label, self)
     self._spawn_prompt_client = types.MethodType(Node._spawn_prompt_client, self)
     return self, sent, clock
 
@@ -324,6 +326,7 @@ def test_a_policy_phase_waits_for_the_client_to_be_ready():
     # The gate started the client, with task_control and the topics.
     name, label, extra = self.policies.started[0]
     assert name == "prompt_client"        # not the first policy's name
+    assert label == "t_prompt_client_20260928_174335"   # stamped: runs do not overwrite
     assert extra["task_control"] is True
     assert json.loads(sent[0])["task"] == ""        # the latched command is a pause
     self.prompt.on_state(state("idle", 1))
