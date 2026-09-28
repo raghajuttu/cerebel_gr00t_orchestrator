@@ -67,7 +67,7 @@ from .state_machine import Action, MissionRunner, Phase
 
 # The prompt client's command and state topics: a command sent before the
 # client subscribed must still reach it, and a state published before this node
-# subscribed must still be seen. Matches adibot_gr00t_client's task_control QoS.
+# subscribed must still be seen. Matches the client's task_control QoS.
 LATCHED_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
