@@ -206,25 +206,33 @@ e-stop, which cuts power.
 
 ## Status
 
-**v0.4.0 — written, tested in simulation of itself, never run on a robot.**
+**v0.5.0 — the policy switch is proven on hardware. Movement is not.**
 
-Proven: the pure-Python core, by 96 unit tests — mission validation, the step
-sequencing, retries, repeats, hold-and-resume, the grasp and settle conditions
-with their arming rules and their conjunction, the joint envelopes, the
-independence of the completion check from both loop rates, and the
-inference-client command line including the quoting of `task_description`.
+Proven on Adibot, 2026-09-28, against the `pick_scan_place` checkpoint: a pick
+phase ending on `gripper closed AND inside the carry envelope`, a policy switch,
+a place phase ending on `right gripper open AND inside the placed envelope AND
+settled`, and `check_arms` after it. Client shutdown takes 0.27 s, and the arms
+hold the object across the switch with nothing commanding them — which confirms
+`forward_position_controller` latches, as ARCHITECTURE.md always claimed.
 
-Not proven, and not to be trusted until it is: every number in `params/` (all the
-placeholders are marked), the Nav2 parameter sets against a real chassis, the base
-adapter against a real vendor driver, the park poses (all zeros — deliberately
-wrong), the carry envelope (the full joint range — deliberately useless until
-measured), and the whole thing end to end. `enable_park` is off by default for this
-reason: a `park_arms` step reports success without moving until you turn it on.
+Every threshold in `params/` is now MEASURED, from the 302-episode
+`20260923_pick_and_scan_and_place_01` dataset, not guessed. The full record,
+including the five latent bugs the first hardware runs exposed and the two
+conditions that had to be rebuilt, is in [docs/VALIDATION.md](docs/VALIDATION.md).
 
-Open questions that the hardware decides, not the code — the chassis's ROS
-interface, the wheel kinematics, and whether a lidar exists. All three are behind
-parameters, and `probe_robot` answers the first and third. See
-[docs/HARDWARE_PROBE.md](docs/HARDWARE_PROBE.md).
+**Not proven, and nothing about movement should be trusted until it is:**
+
+| | |
+|---|---|
+| every `move_base` step | nothing has driven the base under the orchestrator. `move_only` tests it alone |
+| `base_adapter` | the interlock, the zero-holding, the fail-closed timeout, the crab trim — all unexercised against the real chassis, which has no command watchdog |
+| the park ramp | never run on real arms. It interpolates linearly in joint space and there is no collision model here; `placed` to `home` swings the right arm 0.68 rad past the box |
+| the `ready` envelope | `carry` and `placed` have fired on hardware; this one has not been seen |
+| Nav2 | not installed on this robot, and it has no odometry for Nav2 to use. `move_base` steps are the path — see [docs/NAVIGATION.md](docs/NAVIGATION.md) |
+
+Run order for the next session: `move_only` first and measure where it actually
+stops; then `pick_then_place` with `enable_park:=true` to prove the ramp;
+then `two_item_kit`, which needs both.
 
 ## License
 

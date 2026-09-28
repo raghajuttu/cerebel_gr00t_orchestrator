@@ -10,9 +10,13 @@
 #
 # BEFORE RUNNING
 #
-#   1. The chassis bring-up must be running. `probe_robot` found NO velocity
-#      command topic when we last looked, which means either the vendor stack
-#      was down or it has no ROS interface at all. Check:
+#   1. The chassis bring-up must be running. It is not started by anything in
+#      this repo or by move_base.py -- start it in its own terminal:
+#
+#          ros2 launch chassis_control svtrobo_bringup.launch.py
+#
+#      (`probe_robot` found no velocity command topic because it was down.)
+#      Then check:
 #
 #          ros2 topic info /svtrobot_cmd
 #          ros2 topic hz /all_wheel_rpm

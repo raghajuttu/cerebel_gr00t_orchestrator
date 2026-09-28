@@ -30,8 +30,10 @@
 #   1. `move_only` must have worked. Movement first, alone.
 #   2. `pick_then_place` with enable_park:=true must have worked, so the ramp
 #      itself is proven on this hardware before a mission depends on it.
-#   3. The chassis bring-up must be up: `/svtrobot_cmd` with a non-adapter
-#      subscriber, and `/all_wheel_rpm` publishing.
+#   3. The chassis bring-up must be up
+#      (`ros2 launch chassis_control svtrobo_bringup.launch.py`):
+#      `/svtrobot_cmd` with a non-adapter subscriber, and `/all_wheel_rpm`
+#      publishing.
 #   4. Lipstick in tote 1, oil in tote 2. Clear floor between the positions.
 
 name: two_item_kit
