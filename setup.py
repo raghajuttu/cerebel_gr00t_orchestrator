@@ -7,7 +7,9 @@ package_name = "cerebel_orchestrator"
 setup(
     name=package_name,
     version="0.5.0",
-    packages=[package_name],
+    # gr00t_client is the inference client, vendored so the orchestrator does
+    # not depend on groot_deployment (see cerebel_orchestrator/gr00t_client/PROVENANCE.md).
+    packages=[package_name, package_name + ".gr00t_client"],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
@@ -32,6 +34,7 @@ setup(
             "fake_arm = cerebel_orchestrator.fake_arm:main",
             "mission_check = cerebel_orchestrator.mission:main",
             "ping_policy = cerebel_orchestrator.policy_preflight:main",
+            "inference_client = cerebel_orchestrator.gr00t_client.inference_client_node:main",
         ],
     },
 )
