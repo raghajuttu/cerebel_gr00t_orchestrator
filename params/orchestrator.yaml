@@ -91,7 +91,7 @@ orchestrator:
     # process: one inference client per policy phase -- stop it, start the next.
     #   Measured 2026-09-28: 0.27 s shutdown + ~1.0 s startup warm, 3.8 s cold,
     #   with nothing commanding the arms in between.
-    # prompt: ONE client for the mission (adibot_gr00t_client >= 1.1.0 with
+    # prompt: ONE client for the mission (the vendored client with
     #   task_control), its prompt switched per phase. Only for missions whose
     #   policies differ in task_description alone. See docs/POLICY_SWITCHING.md.
     policy_switching: ""
