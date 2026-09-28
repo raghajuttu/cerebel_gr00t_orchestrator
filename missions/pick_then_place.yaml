@@ -217,17 +217,20 @@ steps:
   # in the box rather than onto the floor.
   - {step: check_arms, envelope: travel, seconds: 5.0}
 
-  # Bring the arms back to rest.
+  # Finish the last few degrees of the place.
   #
-  # THE POLICY CANNOT DO THIS. Measured against all 150 place episodes: the
-  # phase ends 0.656 rad from rest at its worst joint, and the episode's own
-  # last frame is 0.656 rad out too -- the condition fires exactly where the
-  # demonstration stops. Recording ended while the demonstrator was still
-  # bringing the arms back, so the return is not in the data and the policy was
-  # never shown it.
+  # The policy gets the arms to within about 0.1 rad -- six degrees -- of where
+  # place episodes end, and then stops. Not because the orchestrator cuts it
+  # off: the demonstrations only hold still for 1.5 to 2 s before recording
+  # ends, so requiring 2 s of stillness fires in 3 of 52 episodes and 3 s in
+  # none. The data does not support waiting longer.
   #
-  # So the orchestrator does it: a joint-space ramp to the measured rest pose,
-  # deterministic, no policy involved.
+  # So a short ramp closes the gap: under a second at 0.15 rad/s, to the
+  # measured median final pose of the late place episodes.
+  #
+  # `placed`, NOT `home`. home is where a PICK starts, 0.65 rad away on right
+  # joint5 -- the right move to begin another cycle, the wrong one for tidying
+  # up the cycle that just ended.
   #
   # GATED BY enable_park, which is FALSE by default -- this step reports success
   # without moving until you turn it on. Do that only when you are ready to
@@ -236,7 +239,7 @@ steps:
   # mission the orchestrator commands itself.
   #
   #     ros2 launch ... mission:=pick_then_place use_nav2:=false enable_park:=true
-  - {step: park_arms, profile: home}
-  - {step: check_arms, envelope: home, seconds: 5.0}
+  - {step: park_arms, profile: placed}
+  - {step: check_arms, envelope: placed, seconds: 5.0}
 
 repeat: 1

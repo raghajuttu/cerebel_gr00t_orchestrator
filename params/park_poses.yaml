@@ -67,3 +67,22 @@ profiles:
     right_arm: [ 0.0799,  0.0488, -0.0542,  0.2272, -0.1432, -0.2262, -0.4541]
     left_gripper: 0.0483
     right_gripper: 0.0496
+
+  placed:
+    # The pose a place episode ends at -- the median final frame of the 52 late
+    # place episodes (index >= 250) of 20260923_pick_and_scan_and_place_01.
+    #
+    # This is a FINISHING park, not a repositioning one. The place policy gets
+    # the arms to within about 0.1 rad of here and then its episode ends,
+    # because the demonstrations only hold still for 1.5-2 s and no stillness
+    # threshold can wait longer than the data holds. Six degrees of residual is
+    # not worth chasing with a threshold; it is worth one second of a ramp.
+    #
+    # Use this, not `home`, to finish a place. `home` is where a PICK starts,
+    # 0.65 rad away on right joint5, so parking there after a place is a large
+    # deliberate move -- right for starting another cycle, wrong for tidying up
+    # the one that just finished.
+    left_arm:  [ 0.0063, -0.1293,  0.6371,  0.2617, -0.4770,  0.1427,  0.0942]
+    right_arm: [ 0.0641,  0.0990, -0.5779,  0.1848,  0.5636, -0.2991, -0.2319]
+    left_gripper: 0.0478
+    right_gripper: 0.0491
