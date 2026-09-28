@@ -112,7 +112,7 @@ Exactly this, per phase, with the phase's own values:
 ros2 run cerebel_orchestrator inference_client --ros-args \
   -p task_description:='pick up the green cube and place it in the box' \
   -p server_host:='127.0.0.1' -p server_port:=5555 \
-  -p log_run_name:='two_station_pick_place_c1_s3_run_policy_pick_cube' \
+  -p log_run_name:='two_station_pick_place_c1_s3_run_policy_pick_cube_20260928_174335' \
   -p log_dir:='~/adibot_logs' \
   -p checkpoint_label:='adibot-green-pick' \
   -p execution_horizon:=16 -p prefetch_enable:=true -p rtc_enable:=false \
@@ -129,7 +129,9 @@ compare. Things worth noting:
   byte-identical to the training annotation or the policy is being prompted with
   something it never saw.
 * **`log_run_name` identifies the mission step**:
-  `<mission>_c<cycle>_s<step>_<kind>_<policy>[_a<attempt>]`. The per-tick CSV, the
+  `<mission>_c<cycle>_s<step>_<kind>_<policy>[_a<attempt>]_<YYYYmmdd_HHMMSS>`, the
+  stamp being when the mission started, so a run never overwrites an earlier
+  one's logs. The per-tick CSV, the
   sidecar and the chunk store all carry it, so a run of a four-phase mission leaves
   four self-describing sets of logs that
   [`adibot_run_browser`](https://github.com/raghajuttu/adibot_run_browser) opens
@@ -249,7 +251,7 @@ What changes:
   process switching does. The next policy phase starts a fresh one.
 * A client that dies between phases is restarted at the next policy phase; one
   that dies during a phase fails that phase, as before.
-* **One run log** for the mission (`<mission>_prompt_client`), not one per phase.
+* **One run log** for the mission (`<mission>_prompt_client_<YYYYmmdd_HHMMSS>`), not one per phase.
   Its sidecar lists every switch in `task_events`.
 
 The mission is refused at load if its policies differ in anything but
