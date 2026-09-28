@@ -66,7 +66,7 @@ class PolicyPrepareError(RuntimeError):
 DEFAULT_POLICY_CMD: List[str] = [
     "ros2",
     "run",
-    "adibot_gr00t_client",
+    "cerebel_orchestrator",
     "inference_client",
 ]
 

@@ -73,7 +73,7 @@ def test_scalars_survive_the_round_trip():
 
 def test_the_command_carries_the_policy_identity(runner, policy):
     argv = runner.build_argv(policy, "run_7")
-    assert argv[:4] == ["ros2", "run", "adibot_gr00t_client", "inference_client"]
+    assert argv[:4] == ["ros2", "run", "cerebel_orchestrator", "inference_client"]
     assert "--ros-args" in argv
     params = params_of(argv)
     assert yaml.safe_load(params["task_description"]) == (
