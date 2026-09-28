@@ -70,8 +70,8 @@ import zmq
 import msgpack
 import msgpack_numpy as msgpack_numpy  # noqa: N812
 
-from adibot_gr00t_client.data_logger import InferenceLogger
-from adibot_gr00t_client.rtc import (build_seed_action, freeze_error_mrad,
+from cerebel_orchestrator.gr00t_client.data_logger import InferenceLogger
+from cerebel_orchestrator.gr00t_client.rtc import (build_seed_action, freeze_error_mrad,
                                      plan_seed, rtc_options, seed_rows)
 
 # =============================================================================
