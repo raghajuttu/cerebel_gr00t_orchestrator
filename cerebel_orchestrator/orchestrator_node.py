@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
@@ -330,6 +331,10 @@ class OrchestratorNode(Node):
         self._estop = False
         self._nav_ready = False
         self._summary_printed = False
+        # Appended to every client's log name. The names are otherwise fixed per
+        # mission step, so each run overwrote the last one's CSV, sidecar and
+        # chunk store. Re-stamped at every mission start.
+        self._run_stamp = time.strftime("%Y%m%d_%H%M%S")
 
         self._print_banner()
         if bool(get("auto_start").value):
@@ -498,6 +503,7 @@ class OrchestratorNode(Node):
                 )
                 return
         self._seed_axis()
+        self._run_stamp = time.strftime("%Y%m%d_%H%M%S")
         if self.prompt_mode:
             # Start the client now, so its cold start happens before the first
             # step instead of inside the first phase's timeout.
@@ -835,7 +841,7 @@ class OrchestratorNode(Node):
                         f"    prompt epoch {epoch}: {action.policy.task_description!r}"
                     )
                 else:
-                    self.policies.start(action.policy, action.run_label)
+                    self.policies.start(action.policy, self._log_label(action.run_label))
             except PolicyPrepareError as exc:
                 # The controller was not re-initialised, so no client started and
                 # nothing has moved. Fail the phase here rather than monitoring
@@ -983,6 +989,10 @@ class OrchestratorNode(Node):
 
     # -- prompt switching ----------------------------------------------------
 
+    def _log_label(self, label: str) -> str:
+        """A client's log name: the step's label plus when this mission started."""
+        return f"{label}_{self._run_stamp}"
+
     def _spawn_prompt_client(self) -> None:
         assert self.prompt is not None
         died = self.policies.check()
@@ -998,7 +1008,7 @@ class OrchestratorNode(Node):
         try:
             self.policies.start(
                 base,
-                f"{self.mission.name}_prompt_client",
+                self._log_label(f"{self.mission.name}_prompt_client"),
                 extra_params={
                     "task_control": True,
                     "task_command_topic": str(get("client_task_topic").value),
