@@ -11,8 +11,10 @@ chunk store for free.
 What "switching policies" means concretely:
 
 * **same checkpoint, different prompt** -- two policies pointing at one
-  ``server_host:server_port`` with different ``task_description``. Cheap; the
-  switch costs one client restart (a few seconds).
+  ``server_host:server_port`` with different ``task_description``. Here the
+  switch costs one client restart (a few seconds) -- or, with
+  ``policy_switching: prompt``, no restart at all: one client for the whole
+  mission, its prompt switched at runtime (prompt_client.py).
 * **different checkpoint** -- two policies pointing at different ports. The
   policy server serves exactly one checkpoint, so run one server per checkpoint
   on the GPU box. Nothing here can make a running server load another
@@ -142,7 +144,12 @@ class PolicyRunner:
 
     # -- starting ------------------------------------------------------------
 
-    def build_argv(self, policy: Policy, run_label: str) -> List[str]:
+    def build_argv(
+        self,
+        policy: Policy,
+        run_label: str,
+        extra_params: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         params: Dict[str, Any] = {
             "task_description": policy.task_description,
             "server_host": policy.server_host,
@@ -156,6 +163,9 @@ class PolicyRunner:
         # defaults above -- but never the policy identity, which mission.py
         # already refuses to let params touch.
         params.update(policy.params)
+        # Set by the orchestrator itself (prompt switching), after the mission's
+        # own: mission.py refuses a mission that tries to set these.
+        params.update(extra_params or {})
 
         argv = list(self.config.policy_cmd) + ["--ros-args"]
         for name, value in params.items():
@@ -217,13 +227,18 @@ class PolicyRunner:
             time.sleep(self.config.prepare_settle_s)
         return None
 
-    def start(self, policy: Policy, run_label: str) -> Session:
+    def start(
+        self,
+        policy: Policy,
+        run_label: str,
+        extra_params: Optional[Dict[str, Any]] = None,
+    ) -> Session:
         if self.session is not None:
             raise RuntimeError(
                 f"policy {self.session.policy.name!r} is still running; "
                 "stop it before starting another"
             )
-        argv = self.build_argv(policy, run_label)
+        argv = self.build_argv(policy, run_label, extra_params)
         self.log.info(f"policy {policy.name}: {' '.join(argv)}")
 
         error = self.prepare()
