@@ -28,6 +28,11 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <!-- The vendored inference client (cerebel_orchestrator/gr00t_client). Its ZMQ
+       transport (pyzmq, msgpack, msgpack_numpy) is pip-installed and deliberately
+       not declared as rosdep keys, as in groot_deployment. -->
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <!-- Nav2 is a runtime dependency of the bringup launch files only; it is
        listed so rosdep installs it on the robot computer. -->
