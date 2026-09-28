@@ -18,7 +18,8 @@ policies:
       enable_limits: false
 ```
 
-Each entry is everything needed to start one `adibot_gr00t_client` process. The
+Each entry is everything needed to start one inference client process (this
+repository's vendored copy, `cerebel_orchestrator/gr00t_client/`). The
 `params` block is passed straight through as ROS parameters, so anything in that
 package's `docs/ARGUMENTS.md` is settable per phase — the RTC knobs, the execution
 horizon, the safety limits, the topic names, which arms are enabled.
@@ -108,7 +109,7 @@ ros2 run cerebel_orchestrator ping_policy 127.0.0.1:5555
 Exactly this, per phase, with the phase's own values:
 
 ```bash
-ros2 run adibot_gr00t_client inference_client --ros-args \
+ros2 run cerebel_orchestrator inference_client --ros-args \
   -p task_description:='pick up the green cube and place it in the box' \
   -p server_host:='127.0.0.1' -p server_port:=5555 \
   -p log_run_name:='two_station_pick_place_c1_s3_run_policy_pick_cube' \
@@ -138,10 +139,12 @@ compare. Things worth noting:
   `checkpoint_label` — otherwise a mission's logs would claim one policy while
   another ran.
 * **The command itself is configurable.** `policy_cmd` in `params/orchestrator.yaml`
-  defaults to `["ros2", "run", "adibot_gr00t_client", "inference_client"]`. If the
+  defaults to `["ros2", "run", "cerebel_orchestrator", "inference_client"]` — the
+  vendored client. Point it at `adibot_gr00t_client` to run groot_deployment's
+  copy instead (process switching only; it has no task control). If the
   orchestrator is started from an environment that has not sourced the workspace,
   wrap it:
-  `["bash", "-lc", "source ~/Desktop/gripper/install/setup.bash && exec ros2 run adibot_gr00t_client inference_client"]`.
+  `["bash", "-lc", "source ~/Desktop/effort/install/setup.bash && exec ros2 run cerebel_orchestrator inference_client"]`.
 
 ## Re-initialising the arm controller between policies
 
@@ -211,8 +214,9 @@ the arms in between. Almost all of that is process startup, and none of it is
 needed when the two phases are prompts of **one checkpoint**, because the client
 reads its prompt afresh for every request.
 
-`policy_switching: prompt` runs one client (adibot_gr00t_client >= 1.1.0,
-`task_control:=true`) for the whole mission and switches its prompt instead:
+`policy_switching: prompt` runs one client (the vendored client with
+`task_control:=true`, [CLIENT_TASK_CONTROL.md](CLIENT_TASK_CONTROL.md)) for the
+whole mission and switches its prompt instead:
 
 ```yaml
 policy_switching: prompt     # at the top level of the mission
