@@ -15,7 +15,7 @@ A mission is a list of steps in a YAML file. The orchestrator executes them:
 | Step | What runs | Base | Arms |
 |---|---|---|---|
 | `navigate` | Nav2 `NavigateToPose` to a named station | moving | holding a known pose |
-| `run_policy` | one `adibot_gr00t_client` process, with that phase's parameters | gated shut | moving |
+| `run_policy` | the inference client (`gr00t_client/`), per phase or prompt-switched | gated shut | moving |
 | `park_arms` | a joint-space ramp to a named pose | gated shut | moving |
 | `check_arms` | verify the arms are inside a named joint envelope | gated shut | still |
 | `wait` | nothing | gated shut | still |
@@ -48,13 +48,15 @@ shows up as the finger joint being outside its bound.
 
 Three design decisions shape everything else:
 
-**The inference client is not modified.** `adibot_gr00t_client` was validated on
-hardware as a node that runs one policy until it is killed. Rather than fork it,
-the orchestrator runs it as a child process — one per policy phase, started with
-that phase's `task_description`, server address and parameters. Switching policies
-is starting a different process. Every phase gets its own run log, sidecar and
-chunk store, named after the mission step. See
-[docs/POLICY_SWITCHING.md](docs/POLICY_SWITCHING.md).
+**The inference client is vendored, and runs as a child process.** It is a copy of
+groot_deployment's `adibot_gr00t_client` v1.0.0, the version validated on
+hardware — byte-identical when copied, every change since in its own commit
+([PROVENANCE](cerebel_orchestrator/gr00t_client/PROVENANCE.md)) — so this
+repository needs no other at runtime. By default the orchestrator starts one
+client per policy phase with that phase's `task_description`, server address and
+parameters, and every phase gets its own run log, sidecar and chunk store.
+`policy_switching: prompt` instead runs one client for the mission and switches
+its prompt. See [docs/POLICY_SWITCHING.md](docs/POLICY_SWITCHING.md).
 
 **The base is gated by a heartbeat, not by good intentions.** `base_adapter` sits
 between Nav2 and the chassis and forwards wheel commands only while the
