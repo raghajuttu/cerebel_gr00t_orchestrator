@@ -210,10 +210,11 @@ base_adapter:
     # with linear.y), so lateral motion is real and must be allowed.
     allow_lateral: true
 
-    # Crab correction. Commanded pure-lateral motion comes out diagonal on this
-    # chassis, by different amounts each way. These are move_base.py's measured
-    # values, as a linear.x component per unit |linear.y|. Re-measure with
-    # `./move_base.py left 100 --trim <value>` and take the one that runs
-    # straightest; left and right are calibrated independently.
-    lateral_trim_left: -0.025
-    lateral_trim_right: -0.040
+    # Crab correction: a linear.x component added per unit |linear.y|, left and
+    # right independently. ZERO since 2026-09-28, set on the robot after the
+    # first full three_station_kit cycle -- the move_base.py values it used to
+    # carry (-0.025 left / -0.040 right) must not be applied. If lateral moves
+    # ever need a correction again, re-measure it on the robot with
+    # `./move_base.py left 100 --trim <value>` rather than restoring those.
+    lateral_trim_left: 0.0
+    lateral_trim_right: 0.0
