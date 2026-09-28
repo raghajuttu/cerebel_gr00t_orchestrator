@@ -396,3 +396,77 @@ def test_process_mode_gates_nothing():
     self.prompt_mode = False
     assert gate(self, action("move_base"))
     assert self.policies.started == []
+
+
+# -- the next step starts on the same tick -----------------------------------
+
+
+class _Runner:
+    def __init__(self, actions):
+        self.actions = list(actions)
+        self.terminal = False
+        self.held = False
+        self.reports = []
+
+    def pending(self):
+        return self.actions[0] if self.actions else None
+
+    def report(self, ok, reason):
+        self.reports.append((ok, reason))
+        self.actions.pop(0)
+        self.terminal = not self.actions
+
+
+def tick_node(actions, gate=lambda action: True):
+    self = types.SimpleNamespace()
+    self.runner = _Runner(actions)
+    self._current = None
+    self.started = []
+    self._publish_status = lambda: None
+    self._finish_mission = lambda: None
+    self._prompt_gate = gate
+
+    def start(action):
+        self._current = action
+        self.started.append(action)
+
+    def end(action, ok, reason):
+        self._current = None
+        self.runner.report(ok, reason)
+
+    self._start_action = start
+    self._end_action = end
+    self._check_action = lambda action: (True, "done")
+    self._start_pending = types.MethodType(Node._start_pending, self)
+    return self
+
+
+def test_the_next_step_starts_on_the_tick_the_last_one_ended():
+    pick, place, check = action("run_policy", 0), action("run_policy", 1), action("check_arms", 2)
+    self = tick_node([pick, place, check])
+    Node._supervisor_tick(self)           # starts the pick
+    assert self.started == [pick]
+    Node._supervisor_tick(self)           # the pick ends AND the place starts
+    assert self.started == [pick, place]
+    assert self._current is place
+
+
+def test_a_gated_step_waits_for_the_next_tick():
+    pick, move = action("run_policy", 0), action("move_base", 1)
+    self = tick_node([pick, move], gate=lambda a: a.kind != "move_base")
+    Node._supervisor_tick(self)
+    Node._supervisor_tick(self)           # the pick ends; the move is gated
+    assert self.started == [pick]
+    assert self._current is None
+    self._prompt_gate = lambda a: True    # the pause is acknowledged
+    Node._supervisor_tick(self)
+    assert self.started == [pick, move]
+
+
+def test_nothing_starts_after_the_last_step():
+    last = action("check_arms", 0)
+    self = tick_node([last])
+    Node._supervisor_tick(self)
+    Node._supervisor_tick(self)
+    assert self.started == [last]
+    assert self.runner.terminal
