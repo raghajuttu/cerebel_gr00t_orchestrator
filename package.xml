@@ -9,8 +9,9 @@
     policies per phase, and enforces that the base and the arms never move at
     the same time.
 
-    The GR00T inference client itself is NOT part of this package -- the
-    validated adibot_gr00t_client is driven as a child process, unmodified.
+    The GR00T inference client is vendored in this package (gr00t_client/,
+    from groot_deployment v1.0.0 -- see gr00t_client/PROVENANCE.md) and
+    driven as a child process.
   </description>
   <maintainer email="thoppay@cerebel.co">cerebel</maintainer>
   <license>Proprietary</license>
