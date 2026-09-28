@@ -31,6 +31,12 @@ from launch_ros.actions import Node
 
 PACKAGE = "cerebel_orchestrator"
 
+# Every flag is checked by launch itself. Unchecked, `use_nav2:=falseenable_park:=true`
+# (a missing space) set use_nav2 to that whole string and left enable_park at
+# its default -- silently, on hardware, 2026-09-28.
+BOOL = ["true", "false"]
+KINEMATICS = ["holonomic", "diff_drive"]
+
 
 def generate_launch_description() -> LaunchDescription:
     share = get_package_share_directory(PACKAGE)
@@ -38,10 +44,11 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("mission", default_value="two_station_pick_place"),
-            DeclareLaunchArgument("kinematics", default_value="holonomic"),
+            DeclareLaunchArgument("kinematics", default_value="holonomic", choices=KINEMATICS),
             DeclareLaunchArgument(
                 "holonomic",
                 default_value="true",
+                choices=BOOL,
                 description=(
                     "make the fake base able to strafe. True by default because "
                     "the real chassis is four-wheel swerve: with this false a "
@@ -57,6 +64,7 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "mock_policy",
                 default_value="true",
+                choices=BOOL,
                 description="keep true unless a real policy server is reachable",
             ),
             Node(
