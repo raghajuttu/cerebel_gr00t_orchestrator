@@ -13,11 +13,8 @@
 #
 # **THE ORCHESTRATOR COMMANDS NOTHING WHILE THE TASK IS RUNNING.** No arm hold
 # (hold_arms_between_policies is false), no base. Through the pick, the switch
-# and the place, every joint that moves is moved by a policy.
-#
-# The one exception is the LAST step, a park ramp back to rest -- and it is off
-# by default (enable_park is false). It exists because the policy cannot do it:
-# see the note on that step.
+# and the place, every joint that moves is moved by a policy -- including the
+# return to rest at the end, which the place demonstrations do themselves.
 #
 # **There is deliberately nothing between the two policies.** No park, no
 # check_arms, no wait. The place policy's first observation has to be the pick
@@ -122,9 +119,6 @@ steps:
   # No park at the START. The pick episodes all begin from the arms' rest pose,
   # which is where they already are, so there is nothing to do -- and it keeps
   # the orchestrator out of the way of the thing being tested.
-  #
-  # Add `- {step: park_arms, profile: home}` here if you want the arms placed
-  # repeatably before each run rather than left wherever the last one ended.
 
   # HOW THIS PHASE ENDS: the object is held AND the arm has lifted it clear.
   #
@@ -192,8 +186,8 @@ steps:
   # in 44 of the 52 late episodes, at median 90%.
   #
   # `on_fail: continue` because the tighter condition fires in fewer episodes
-  # (73/150 in replay) and the park step below is the backstop: a timeout here
-  # means the arms are parked deliberately instead, not that the run failed.
+  # (73/150 in replay), and a timeout here only means the policy ran for the
+  # full cap -- the check_arms below is what says whether the place worked.
   - step: run_policy
     policy: place_and_scan
     until: {timeout_s: 55.0, grasp: open, side: right,
@@ -216,30 +210,5 @@ steps:
   # Confirm both hands are empty. This is the check that says the object went
   # in the box rather than onto the floor.
   - {step: check_arms, envelope: travel, seconds: 5.0}
-
-  # Finish the last few degrees of the place.
-  #
-  # The policy gets the arms to within about 0.1 rad -- six degrees -- of where
-  # place episodes end, and then stops. Not because the orchestrator cuts it
-  # off: the demonstrations only hold still for 1.5 to 2 s before recording
-  # ends, so requiring 2 s of stillness fires in 3 of 52 episodes and 3 s in
-  # none. The data does not support waiting longer.
-  #
-  # So a short ramp closes the gap: under a second at 0.15 rad/s, to the
-  # measured median final pose of the late place episodes.
-  #
-  # `placed`, NOT `home`. home is where a PICK starts, 0.65 rad away on right
-  # joint5 -- the right move to begin another cycle, the wrong one for tidying
-  # up the cycle that just ended.
-  #
-  # GATED BY enable_park, which is FALSE by default -- this step reports success
-  # without moving until you turn it on. Do that only when you are ready to
-  # watch the first park: the ramp has never run on this hardware, it moves both
-  # arms at max_joint_speed (0.15 rad/s), and it is the one thing in this
-  # mission the orchestrator commands itself.
-  #
-  #     ros2 launch ... mission:=pick_then_place use_nav2:=false enable_park:=true
-  - {step: park_arms, profile: placed}
-  - {step: check_arms, envelope: placed, seconds: 5.0}
 
 repeat: 1
