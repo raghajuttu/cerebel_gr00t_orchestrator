@@ -85,6 +85,20 @@ orchestrator:
     # Over an SSH forward the local port accepts connections whenever the tunnel
     # process is alive, so only a round trip proves the GPU box is there.
     policy_preflight: true
+
+    # -- policy switching ---------------------------------------------------
+    # "" = what the mission says (policy_switching, default process).
+    # process: one inference client per policy phase -- stop it, start the next.
+    #   Measured 2026-09-28: 0.27 s shutdown + ~1.0 s startup warm, 3.8 s cold,
+    #   with nothing commanding the arms in between.
+    # prompt: ONE client for the mission (adibot_gr00t_client >= 1.1.0 with
+    #   task_control), its prompt switched per phase. Only for missions whose
+    #   policies differ in task_description alone. See docs/POLICY_SWITCHING.md.
+    policy_switching: ""
+    prompt_handover: ""           # "" = the mission's prompt_blend; blend | pause
+    client_task_topic: /gr00t_client/task
+    client_state_topic: /gr00t_client/task_state
+    prompt_pause_timeout_s: 1.0   # a pause not acknowledged by then -> kill
     preflight_timeout_ms: 5000
 
     # -- when a policy phase is done (MEASURE all four) ---------------------
