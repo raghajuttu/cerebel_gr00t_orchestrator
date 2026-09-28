@@ -48,6 +48,7 @@ SAFETY -- per-joint soft limits (a GUARD, not a correction):
   never touches them -- only a policy diverging from its training gets caught. A
   sustained high skip rate raises an OUT-OF-DISTRIBUTION warning.
 """
+import json
 import os
 import queue
 import threading
@@ -61,10 +62,10 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import (qos_profile_sensor_data, QoSProfile,
-                       ReliabilityPolicy, HistoryPolicy)
+                       ReliabilityPolicy, HistoryPolicy, DurabilityPolicy)
 from control_msgs.action import GripperCommand
 from sensor_msgs.msg import JointState, Image
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 from cv_bridge import CvBridge
 import zmq
 import msgpack
@@ -92,8 +93,9 @@ RIGHT_ARM_SLICE = slice(8, 15)    # right joints 1..7
 RIGHT_GRIPPER_IDX = 15
 
 # Stamped into every run's sidecar so a log can be traced to the code that
-# produced it. Keep in step with setup.py.
-PACKAGE_VERSION = "1.0.0"
+# produced it. The vendored copy: groot_deployment 1.0.0 plus this repository's
+# changes (+cerebel.N; see PROVENANCE.md). Bump N with every change here.
+PACKAGE_VERSION = "1.0.0+cerebel.1"
 
 # =============================================================================
 # Vendored minimal ZMQ client (REQ socket, msgpack + msgpack_numpy)
@@ -178,6 +180,7 @@ class _Request:
     t_req: float                # wall time of that observation
     obs_state: np.ndarray       # the 16-D joint state it carried (copy)
     rtc: Optional[dict]         # seed facts (see _attach_rtc_seed) or None
+    epoch: int = 0              # task epoch it was built under (task_control)
 
 
 # =============================================================================
@@ -281,6 +284,17 @@ class InferenceClientNode(Node):
             "task_description",
             "pick up the lipstick and place it into the box",
         )
+        # ---- Task control (one client, several prompts) ---------------------
+        # task_control: false = run task_description from startup until killed,
+        # exactly as before. true = start IDLE (connected, pinged, publishing
+        # nothing) and take the task from task_command_topic, so an
+        # orchestrator can switch prompts of ONE checkpoint without restarting
+        # the process. A switch keeps executing the current plan while the new
+        # prompt's first chunk is in flight (with RTC it grows out of that
+        # plan); an empty task pauses. See docs/CLIENT_TASK_CONTROL.md.
+        self.declare_parameter("task_control", False)
+        self.declare_parameter("task_command_topic", "~/task")
+        self.declare_parameter("task_state_topic", "~/task_state")
         # Topics (confirmed on SER9).
         self.declare_parameter("joint_states_topic", "/joint_states")
         self.declare_parameter("head_image_topic",
@@ -338,6 +352,9 @@ class InferenceClientNode(Node):
         self.run_notes = str(gp("run_notes").value)
         self.log_chunks = bool(gp("log_chunks").value)
         self.task_description = str(gp("task_description").value)
+        self.task_control = bool(gp("task_control").value)
+        self.task_command_topic = str(gp("task_command_topic").value)
+        self.task_state_topic = str(gp("task_state_topic").value)
         self.joint_states_topic = gp("joint_states_topic").value
         self.head_image_topic = gp("head_image_topic").value
         self.wrist_left_image_topic = gp("wrist_left_image_topic").value
@@ -436,6 +453,20 @@ class InferenceClientNode(Node):
         # (a step is "skipped" when any enabled side was out of limits).
         self._skip_window = deque(maxlen=100)
         self._last_ood_warn_tick = 0
+        # ---- Task control state ---------------------------------------------
+        # The epoch is the id of the task command in force. Every request
+        # carries the epoch it was built under, and a response from an older
+        # epoch is discarded on arrival -- it answers a prompt that is no
+        # longer the task, or arrives after a pause. Without task_control the
+        # client is active from the start and the epoch never changes.
+        self._active = not self.task_control
+        self._task_epoch = 0
+        self._applied_epoch = 0      # last epoch whose first chunk was accepted
+        self._fire_now = False       # request at once, not at prefetch_lead
+        self._task_changed_at: Optional[float] = None
+        self._superseded_chunks = 0  # responses discarded as an older epoch
+        self._task_events = []       # sidecar record of every switch
+        self._task_state_pub = None
 
         self.client = GR00TZMQClient(self.server_host, self.server_port,
                                      timeout_ms=self.zmq_timeout_ms)
@@ -494,6 +525,21 @@ class InferenceClientNode(Node):
         # Last goal position sent per side, for the min-delta filter.
         self._last_gripper_sent = {"left": None, "right": None}
         self._gripper_server_warned = set()
+
+        # Task control: commands in, state out. RELIABLE + TRANSIENT_LOCAL on
+        # both, so a command sent before this node subscribed is still
+        # delivered, and an orchestrator that subscribes late still sees the
+        # current state. The epoch makes a replayed command harmless.
+        if self.task_control:
+            latched = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1)
+            self.create_subscription(String, self.task_command_topic,
+                                     self._on_task_command, latched)
+            self._task_state_pub = self.create_publisher(
+                String, self.task_state_topic, latched)
 
         self._print_startup_banner()
         self._timer = None  # created after a successful ping (see start())
@@ -578,6 +624,7 @@ class InferenceClientNode(Node):
             "server_port": self.server_port,
             "zmq_timeout_ms": self.zmq_timeout_ms,
             "log_chunks": self.log_chunks,
+            "task_control": self.task_control,
             "chunks_file": (os.path.basename(self.data_log.chunks_path)
                             if self.data_log is not None and self.log_chunks else None),
             "package_version": PACKAGE_VERSION,
@@ -626,7 +673,12 @@ class InferenceClientNode(Node):
             log.warn("  joint limits         : DISABLED (enable_limits=false) "
                      "-- commands published unchecked; e-stop is the only guard")
         log.info(f"  ood_warn_fraction    : {self.ood_warn_fraction}")
-        log.info(f"  task_description     : {self.task_description!r}")
+        if self.task_control:
+            log.info("  task_control         : ON -- starts IDLE, task from "
+                     f"{self.task_command_topic}, state on "
+                     f"{self.task_state_topic}")
+        else:
+            log.info(f"  task_description     : {self.task_description!r}")
         log.info(f"  sub joint_states     : {self.joint_states_topic}")
         log.info(f"  sub head             : {self.head_image_topic}")
         log.info(f"  sub wrist_left       : {self.wrist_left_image_topic}")
@@ -650,6 +702,14 @@ class InferenceClientNode(Node):
     def start(self) -> bool:
         """Ping the server; only start the control loop if it responds."""
         log = self.get_logger()
+        if self.task_control and not self.prefetch_enable:
+            # A switch discards the in-flight response of the old prompt and
+            # fires at once; the blocking loop has no in-flight request to
+            # discard and cannot fire early, so it could only switch at the
+            # next chunk boundary. Refuse rather than switch late silently.
+            log.error("task_control needs prefetch_enable:=true. Control loop "
+                      "will NOT start.")
+            return False
         max_attempts = 10
         for attempt in range(1, max_attempts + 1):
             log.info(f"Pinging GR00T server ({attempt}/{max_attempts}) ...")
@@ -666,12 +726,106 @@ class InferenceClientNode(Node):
                 period = 1.0 / self.control_rate_hz
                 self._timer = self.create_timer(period, self._control_loop)
                 log.info(f"Control loop started at {self.control_rate_hz} Hz.")
+                if self.task_control:
+                    log.info("IDLE: waiting for a task on "
+                             f"{self.task_command_topic}.")
+                    self._publish_task_state("idle")
                 return True
             log.warn("Ping failed (timeout). Retrying in 2s ...")
             time.sleep(2.0)
         log.error(f"Server did not respond to ping after {max_attempts} "
                   f"attempts. Control loop will NOT start.")
         return False
+
+    # ----------------------------------------------------------- task control
+    def _on_task_command(self, msg) -> None:
+        """Take a task command: JSON {"epoch": int, "task": str}.
+
+        A non-empty task SWITCHES to it (or resumes from idle); an empty task
+        PAUSES. Epochs only go up: a command at or below the current epoch is a
+        replay (the topic is TRANSIENT_LOCAL) and is ignored.
+
+        Runs on the executor thread, like the control loop, so nothing here
+        races it. The worker thread is never touched: an old-epoch request
+        already in flight is left to finish and discarded when it lands.
+        """
+        log = self.get_logger()
+        try:
+            command = json.loads(msg.data)
+            epoch = int(command["epoch"])
+            task = str(command.get("task", ""))
+        except (ValueError, KeyError, TypeError) as exc:
+            log.error(f"bad task command {msg.data!r} ({exc}); ignored")
+            return
+        if epoch <= self._task_epoch:
+            return
+        self._task_epoch = epoch
+        self._task_changed_at = time.time()
+
+        if not task:
+            self._pause()
+            log.info(f"task epoch {epoch}: PAUSED -- holding the last "
+                     f"commanded pose")
+            self._record_task_event("pause", "")
+            self._publish_task_state("idle")
+            return
+
+        resuming = not self._active
+        self.task_description = task
+        self._active = True
+        # Fire on the next tick rather than at prefetch_lead: the next chunk
+        # has to be the new prompt's, as soon as the socket is free.
+        self._fire_now = True
+        if resuming:
+            # Nothing is executing and the plan was cleared at the pause, so
+            # the first request goes out unseeded, like a fresh start.
+            log.info(f"task epoch {epoch}: START {task!r}")
+        else:
+            # The current buffer keeps executing until the new chunk lands;
+            # with RTC the new chunk is seeded from it, so the arm does not
+            # stop at the switch.
+            log.info(f"task epoch {epoch}: SWITCH to {task!r} "
+                     f"({len(self._action_buffer)} steps of the old plan "
+                     f"continue meanwhile)")
+        self._record_task_event("resume" if resuming else "switch", task)
+        self._publish_task_state("switching")
+
+    def _pause(self) -> None:
+        """Stop commanding NOW. The controller latches the last command, so
+        the arm holds where it is. The plan is dropped too: seeding the next
+        task from motion that stopped would stitch onto a trajectory the arm
+        is no longer following."""
+        self._active = False
+        self._fire_now = False
+        self._action_buffer = []
+        self._last_raw_action = None
+        self._last_steps = None
+        self._last_raw_horizon = 0
+        self._chunk_cursor = 0
+
+    def _record_task_event(self, kind: str, task: str) -> None:
+        self._task_events.append({
+            "kind": kind, "epoch": self._task_epoch, "task": task,
+            "tick": self._tick, "t_unix": self._task_changed_at,
+        })
+        if self.data_log is not None:
+            try:
+                self.data_log.update_meta(task_events=self._task_events)
+            except Exception:  # noqa: BLE001 -- logging never stops control
+                pass
+
+    def _publish_task_state(self, state: str) -> None:
+        if self._task_state_pub is None:
+            return
+        msg = String()
+        msg.data = json.dumps({
+            "state": state,                 # idle | switching | active
+            "epoch": self._task_epoch,
+            "task": self.task_description if self._active else "",
+            "tick": self._tick,
+            "t_unix": time.time(),
+        })
+        self._task_state_pub.publish(msg)
 
     # ------------------------------------------------------------ subscribers
     # >>> CRITICAL SECTION 1 of 3: JOINT REORDERING ---------------------------
@@ -855,9 +1009,17 @@ class InferenceClientNode(Node):
         # 1) Ingest any completed inference response (worker thread -> here).
         self._ingest_responses()
 
+        # Idle (task_control, paused or not started): no requests, no
+        # commands. A response still in flight is drained above and discarded
+        # by its epoch.
+        if not self._active:
+            return
+
         # 2) Fire the next request once the buffer is down to prefetch_lead
-        #    steps (and no request is already in flight).
-        if not self._inflight and len(self._action_buffer) <= self.prefetch_lead:
+        #    steps (and no request is already in flight) -- or at once after a
+        #    task switch.
+        if not self._inflight and (
+                self._fire_now or len(self._action_buffer) <= self.prefetch_lead):
             self._fire_request()
 
         # 3) Execute one step per tick if available; otherwise hold pose.
@@ -908,7 +1070,7 @@ class InferenceClientNode(Node):
         req = _Request(seq=self._inference_seq, obs=obs, options=None,
                        req_tick=self._tick, t_req=time.time(),
                        obs_state=np.array(self.latest_state, dtype=np.float32),
-                       rtc=None)
+                       rtc=None, epoch=self._task_epoch)
         if self.rtc_enable and self._last_raw_action is not None:
             req.rtc, req.options = self._attach_rtc_seed(obs)
         return req
@@ -989,6 +1151,7 @@ class InferenceClientNode(Node):
             return  # _inflight guard should prevent this; drop rather than block
         self._inference_seq += 1
         self._inflight = True
+        self._fire_now = False
         self._count_request(req)
 
     def _ingest_responses(self) -> None:
@@ -1000,6 +1163,12 @@ class InferenceClientNode(Node):
             except queue.Empty:
                 return
             self._inflight = False
+            if req.epoch != self._task_epoch:
+                # Built under a task that has since been switched or paused.
+                # Its chunk is the wrong prompt's motion; the next request
+                # (fired this tick if still active) carries the current one.
+                self._superseded_chunks += 1
+                continue
             if action is None:
                 self._failed_requests += 1
                 log.warn("Inference request failed (timeout/ZMQ error); "
@@ -1112,6 +1281,17 @@ class InferenceClientNode(Node):
         self._pending_chunk_len = horizon
         self._pending_skip = skip_steps
         self._pending_rtc = req.rtc is not None
+        if self.task_control and self._applied_epoch != req.epoch:
+            # The first chunk of this task: its first step executes on this
+            # same tick (ingest runs before execute in the control loop). This
+            # is the moment the switch is complete, as the arm sees it.
+            self._applied_epoch = req.epoch
+            took = (time.time() - self._task_changed_at
+                    if self._task_changed_at is not None else float("nan"))
+            log.info(f"task epoch {req.epoch}: first chunk of "
+                     f"{self.task_description!r} executing, {took * 1000:.0f} ms "
+                     f"after the command (seeded: {req.rtc is not None})")
+            self._publish_task_state("active")
         log.debug(f"chunk accepted: horizon={horizon}, skipped {skip_steps}, "
                   f"buffered {len(self._action_buffer)}, "
                   f"latency={latency_ms:.1f}ms")
@@ -1382,6 +1562,7 @@ class InferenceClientNode(Node):
                     rtc_reduced_overlap=self._rtc_reduced_overlap,
                     rtc_freeze_violations=self._rtc_freeze_violations,
                     rtc_frozen_overrun=self._rtc_frozen_overrun,
+                    superseded_chunks=self._superseded_chunks,
                 )
             except Exception:  # noqa: BLE001
                 pass
