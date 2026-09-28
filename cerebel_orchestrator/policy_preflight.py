@@ -14,7 +14,7 @@ Only a round trip proves the GPU is there. That is what this does: the same
 ``{"endpoint": "ping"}`` REQ that the inference client sends at startup, with the
 same msgpack framing, from the same machine, through the same tunnel.
 
-It speaks the protocol vendored in ``adibot_gr00t_client``; if that ever changes,
+It speaks the protocol of ``gr00t_client/inference_client_node.py``; if that ever changes,
 change it here too. ``pyzmq``/``msgpack`` are imported lazily so the rest of this
 package -- and its tests -- keep working on a machine that has neither.
 
