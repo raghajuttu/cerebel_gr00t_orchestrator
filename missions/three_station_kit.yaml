@@ -9,8 +9,16 @@
 # two_item_kit (which ran on hardware 2026-09-28) plus the tissue. Built the
 # same way: NO PARK -- the place demonstrations bring the arms down themselves,
 # so every arm motion here is a policy's -- and between phases the orchestrator
-# only CHECKS: `check_arms` before every drive, which aborts rather than moving
-# the base with the arms somewhere unexpected or the object gone.
+# only CHECKS, with `check_arms` before every drive.
+#
+# LENIENT, ON PURPOSE (2026-09-28, for the first full run): nothing stops the
+# mission except a base move that fails twice. Every check_arms and every pick
+# is `on_fail: continue` -- a failure is logged in the summary and the mission
+# goes on. THE OPERATOR IS THE STOP: keep a hand on the e-stop. That includes
+# the case the checks exist for: a pick that failed or dropped its object, or
+# arms outside the drive envelope, will now be driven with instead of aborting.
+# Tighten back to `on_fail: abort` on the checks before drives once one full
+# cycle has been seen.
 #
 # Every place happens at position 1, where tote 1, the scanner and the box are,
 # and each pick at its own tote's position -- exactly how the demonstrations
@@ -109,7 +117,7 @@ steps:
   - step: run_policy
     policy: pick_lipstick
     until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
-    on_fail: abort
+    on_fail: continue
 
   # MEASURED, 150 place episodes: p95 26.4 s -> 55 s cap. Ends when the right
   # gripper opens after the handover AND both arms are inside the pose a place
@@ -121,9 +129,8 @@ steps:
     on_fail: continue
 
   # Both hands empty and the arms where a place leaves them, before the drive.
-  # `on_fail: continue` above means a place that timed out still reaches here,
-  # and this is what stops the base if it went wrong.
-  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: abort}
+  # Lenient: logged, never stops the run (see the header).
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
 
   # ---------------- item 2: the oil, at position 2 -------------------------
   - {step: move_base, to: position_2, on_fail: retry, retries: 1}
@@ -133,11 +140,11 @@ steps:
     policy: pick_oil
     until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
     # Nothing between this pick and the drive home: the object stays in the
-    # gripper, and check_arms measures that it is still held and the arm is
-    # tucked enough to drive.
+    # gripper, and check_arms reports whether it is still held and the arm is
+    # tucked enough to drive (reports only -- lenient).
     ends_parked: true
-    on_fail: abort
-  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: abort}
+    on_fail: continue
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: continue}
 
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
 
@@ -146,7 +153,7 @@ steps:
     until: {timeout_s: 55.0, grasp: open, side: right,
             envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
     on_fail: continue
-  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: abort}
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
 
   # ---------------- item 3: the tissue, at position 3 ----------------------
   # One drive of 76 cm. Dead reckoning, so its error is about twice a 38 cm
@@ -161,8 +168,8 @@ steps:
     policy: pick_tissue
     until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
     ends_parked: true
-    on_fail: abort
-  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: abort}
+    on_fail: continue
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: continue}
 
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
 
@@ -173,7 +180,7 @@ steps:
     on_fail: continue
 
   # Kit complete: both hands empty, the tissue in the box, not on the floor.
-  - {step: check_arms, envelope: travel, seconds: 8.0}
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
 
 # One kit per run. Before raising it: nothing corrects the base's position
 # between cycles, and a second cycle's first pick would start from where the
