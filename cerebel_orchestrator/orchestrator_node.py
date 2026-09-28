@@ -29,6 +29,7 @@ robot was doing and what it was waiting for.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import Dict, List, Optional, Tuple
 
@@ -989,7 +990,9 @@ class OrchestratorNode(Node):
             self.get_logger().warning(f"prompt client had exited: {died[1]}")
         if self.policies.running:
             return
-        base = self.mission.used_policies()[0]
+        # Every phase shares this client, so it carries no one policy's name in
+        # the log: "prompt_client", not whichever policy happened to be first.
+        base = dataclasses.replace(self.mission.used_policies()[0], name="prompt_client")
         self.prompt.before_spawn()
         get = self.get_parameter
         try:
