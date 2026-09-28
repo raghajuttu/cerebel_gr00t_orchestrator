@@ -33,6 +33,24 @@ given. The same applies if Nav2 stops publishing mid-goal (`cmd_timeout_s`).
 `require_enable: false` disables all of this. It exists for bringing up a chassis
 driver on its own, before the orchestrator is in the picture. Do not leave it set.
 
+## The policy client dies with the orchestrator
+
+The arms' counterpart to the base gate. Each inference client runs in its own
+process session, so stopping it can never signal the orchestrator -- but that
+isolation also means nothing ties the client's life to the orchestrator's. A
+normal stop and Ctrl-C were always handled; an orchestrator killed outright
+(SIGKILL, the OOM killer, a native crash) used to leave the client running,
+driving the arms with no phase condition that would ever end it.
+
+`client_guard.py` now sits between them as the leader of the client's process
+group. Within 0.1 s of the orchestrator disappearing it stops the client with
+the same SIGINT -> SIGTERM -> SIGKILL escalation a normal stop uses, so the arms
+are left holding their last commanded pose. It ignores SIGINT and SIGTERM
+itself and exits only when the client has, so a normal stop still waits for the
+client's shutdown before the next one starts. `tests/test_client_guard.py`
+SIGKILLs a stand-in orchestrator and checks the client goes too; those tests
+need Linux, so run them on the robot.
+
 ## Clamping and the lateral block
 
 Every forwarded twist is clipped to `max_linear` and `max_angular` at the last
