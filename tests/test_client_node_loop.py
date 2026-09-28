@@ -55,7 +55,8 @@ class _Pub:
         self.published = []
 
     def publish(self, msg):
-        self.published.append(list(msg.data))
+        self.published.append(msg.data if isinstance(msg.data, str)
+                              else list(msg.data))
 
 
 class _Node:
@@ -116,8 +117,11 @@ def _install_stubs():
 
     rclpy.qos = _module("rclpy.qos", qos_profile_sensor_data=object(),
                         QoSProfile=QoSProfile,
-                        ReliabilityPolicy=types.SimpleNamespace(BEST_EFFORT=1),
-                        HistoryPolicy=types.SimpleNamespace(KEEP_LAST=1))
+                        ReliabilityPolicy=types.SimpleNamespace(BEST_EFFORT=1,
+                                                                RELIABLE=2),
+                        HistoryPolicy=types.SimpleNamespace(KEEP_LAST=1),
+                        DurabilityPolicy=types.SimpleNamespace(VOLATILE=1,
+                                                               TRANSIENT_LOCAL=2))
 
     class GripperCommand:
         class Goal:
@@ -135,7 +139,12 @@ def _install_stubs():
             self.data = []
 
     std = _module("std_msgs")
-    std.msg = _module("std_msgs.msg", Float64MultiArray=Float64MultiArray)
+    class String:
+        def __init__(self, data=""):
+            self.data = data
+
+    std.msg = _module("std_msgs.msg", Float64MultiArray=Float64MultiArray,
+                      String=String)
     _module("cv_bridge", CvBridge=type("CvBridge", (), {}))
     _module("cv2", resize=lambda img, size, interpolation=None: img, INTER_AREA=3)
 
@@ -166,16 +175,18 @@ def _install_stubs():
 
 _modules_before = set(sys.modules)
 _install_stubs()
-
-from cerebel_orchestrator.gr00t_client.inference_client_node import (  # noqa: E402
-    CANONICAL_JOINT_ORDER, InferenceClientNode)
-
-# The node has bound what it imported; take the stubs out of sys.modules so a
-# later importorskip("rclpy") in the orchestrator's robot-only tests is not
-# fooled into running against them. (Orchestrator-only change to this test.)
-for _name in set(sys.modules) - _modules_before:
-    if getattr(sys.modules[_name], "__file__", None) is None:
-        del sys.modules[_name]
+try:
+    from cerebel_orchestrator.gr00t_client.inference_client_node import (  # noqa: E402
+        CANONICAL_JOINT_ORDER, InferenceClientNode)
+finally:
+    # The node has bound what it imported; take the stubs out of sys.modules so
+    # a later importorskip("rclpy") in the orchestrator's robot-only tests is
+    # not fooled into running against them -- also when the import failed, so
+    # one broken import does not cascade into other test files.
+    # (Orchestrator-only change to this test.)
+    for _name in set(sys.modules) - _modules_before:
+        if getattr(sys.modules[_name], "__file__", None) is None:
+            del sys.modules[_name]
 
 KEYS = (("left_arm", 0, 7), ("left_gripper", 7, 8),
         ("right_arm", 8, 15), ("right_gripper", 15, 16))
@@ -200,6 +211,7 @@ class FakeServer:
     def __init__(self, H=40, honour_rtc=True, vel=0.01, bump=0.1):
         self.H, self.honour, self.vel, self.bump = H, honour_rtc, vel, bump
         self.requests = []
+        self.prompts = []
 
     def get_action(self, obs, options):
         state = np.concatenate([np.asarray(obs["state"][k])[0, 0] for k, _, _ in KEYS])
@@ -211,6 +223,8 @@ class FakeServer:
         chunk = (state[None, :] + t * self.vel + bump).astype(np.float32)
         info = {}
         self.requests.append((obs.get("action"), options))
+        self.prompts.append(
+            obs["language"]["annotation.human.task_description"][0][0])
         if "action" in obs and self.honour:
             sent = from_dict(obs["action"])
             H0, ov = int(options["action_horizon"]), int(options["rtc_overlap_steps"])
@@ -434,6 +448,143 @@ class NodeLoopRtcTest(unittest.TestCase):
         # the request after the drop had no plan left to stitch onto
         self.assertEqual(store["rtc_prev_seq"][2], -1)
         self.assertEqual(sim.node._last_seq, 2)
+
+
+
+class TaskControlTest(unittest.TestCase):
+    """task_control: one client, prompts switched at runtime (docs/TASK_CONTROL.md)."""
+
+    PARAMS = {"task_control": True, "prefetch_enable": True, "prefetch_lead": 12,
+              "execution_horizon": 40, "rtc_enable": True,
+              "rtc_overlap_steps": 12, "rtc_frozen_steps": 9}
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+        self._sims = []
+
+    def tearDown(self):
+        # Close every run log first: Windows will not delete an open file.
+        for sim in self._sims:
+            if sim.node.data_log is not None:
+                sim.node.data_log.close()
+        self._tmp.cleanup()
+
+    def _sim(self, latency=8, **params):
+        sim = LoopSim(dict(self.PARAMS, **params), FakeServer(H=40),
+                      latency_ticks=latency, log_dir=self.dir)
+        self._sims.append(sim)
+        # The state publisher is created only when task_control is on.
+        self.assertIsNotNone(sim.node._task_state_pub)
+        return sim
+
+    @staticmethod
+    def _command(sim, epoch, task):
+        sim.node._on_task_command(
+            types.SimpleNamespace(data=json.dumps({"epoch": epoch, "task": task})))
+
+    @staticmethod
+    def _states(sim):
+        return [json.loads(m) for m in sim.node._task_state_pub.published]
+
+    def test_it_starts_idle_and_commands_nothing(self):
+        sim = self._sim()
+        sim.run(60)
+        self.assertEqual(sim.server.requests, [])
+        self.assertEqual(sim.executed, [])
+
+    def test_a_start_command_runs_that_prompt(self):
+        sim = self._sim()
+        sim.run(5)
+        self._command(sim, 1, "pick up the lipstick")
+        sim.run(40)
+        self.assertEqual(set(sim.server.prompts), {"pick up the lipstick"})
+        # Fired on the first tick after the command, so executing from the
+        # 8-tick round trip onward: 40 - 8 steps.
+        self.assertEqual(len(sim.executed), 40 - 8)
+        states = self._states(sim)
+        self.assertEqual([s["state"] for s in states], ["switching", "active"])
+        self.assertEqual(states[-1]["epoch"], 1)
+
+    def test_a_switch_keeps_the_arm_moving_and_stitches_the_seam(self):
+        sim = self._sim()
+        self._command(sim, 1, "pick up the lipstick")
+        sim.run(30)                      # first chunk landed at tick 9
+        executed_before = len(sim.executed)
+        self._command(sim, 2, "scan and place the object")
+        sim.run(30)
+        # One step executed on EVERY tick across the switch: no pause.
+        self.assertEqual(len(sim.executed), executed_before + 30)
+        # The new prompt's request went out at once, seeded from the old plan.
+        self.assertEqual(sim.server.prompts[-1], "scan and place the object")
+        seed, options = sim.server.requests[-1]
+        self.assertIsNotNone(seed)
+        # With RTC honoured the trajectory is continuous through the switch.
+        cmds = np.array([s for _, _, s in sim.executed])
+        np.testing.assert_allclose(np.diff(cmds, axis=0), 0.01, atol=1e-5)
+        store, meta = sim.finish()
+        self.assertEqual([e["kind"] for e in meta["task_events"]], ["resume", "switch"])
+        self.assertEqual(meta["superseded_chunks"], 0)
+
+    def test_a_response_to_the_old_prompt_is_discarded(self):
+        sim = self._sim()
+        self._command(sim, 1, "pick up the lipstick")
+        sim.run(30)
+        # Let the next regular request fire (buffer down to prefetch_lead)...
+        while not sim.node._inflight:
+            sim.run(1)
+        old_seq = sim.node._inference_seq - 1
+        # ...and switch while it is in flight.
+        self._command(sim, 2, "scan and place the object")
+        sim.run(40)
+        executed_seqs = {seq for seq, _, _ in sim.executed}
+        self.assertNotIn(old_seq, executed_seqs)
+        self.assertEqual(sim.server.prompts[-1], "scan and place the object")
+        _, meta = sim.finish()
+        self.assertEqual(meta["superseded_chunks"], 1)
+
+    def test_a_pause_stops_commanding_at_once_and_drops_the_plan(self):
+        sim = self._sim()
+        self._command(sim, 1, "pick up the lipstick")
+        sim.run(30)
+        executed_before = len(sim.executed)
+        self._command(sim, 2, "")
+        sim.run(60)
+        self.assertEqual(len(sim.executed), executed_before)
+        self.assertEqual(sim.node._action_buffer, [])
+        self.assertIsNone(sim.node._last_raw_action)
+        self.assertEqual(self._states(sim)[-1]["state"], "idle")
+        # Resuming starts clean: the first request carries no seed.
+        self._command(sim, 3, "pick up the oil")
+        sim.run(20)
+        resumed = [i for i, p in enumerate(sim.server.prompts) if p == "pick up the oil"]
+        self.assertTrue(resumed)
+        self.assertIsNone(sim.server.requests[resumed[0]][0])
+        self.assertEqual(self._states(sim)[-1]["state"], "active")
+
+    def test_a_replayed_command_is_ignored(self):
+        sim = self._sim()
+        self._command(sim, 1, "pick up the lipstick")
+        sim.run(30)
+        self._command(sim, 2, "")
+        sim.run(5)
+        self._command(sim, 1, "pick up the lipstick")   # TRANSIENT_LOCAL replay
+        sim.run(30)
+        self.assertFalse(sim.node._active)
+        self.assertEqual(sim.node._task_epoch, 2)
+
+    def test_task_control_refuses_the_blocking_loop(self):
+        sim = self._sim(prefetch_enable=False)
+        self.assertFalse(sim.node.start())
+        self.assertIn("prefetch_enable", sim.node.get_logger().errors[-1])
+
+    def test_without_task_control_nothing_changes(self):
+        sim = LoopSim({"prefetch_enable": True}, FakeServer(H=40),
+                      latency_ticks=8, log_dir=self.dir)
+        self._sims.append(sim)
+        self.assertIsNone(sim.node._task_state_pub)
+        sim.run(30)
+        self.assertGreater(len(sim.executed), 0)
 
 
 if __name__ == "__main__":
