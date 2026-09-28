@@ -5,7 +5,7 @@
 | Layer | Runs where | Owns |
 |---|---|---|
 | **Task** | this package, robot computer | which phase is current, which policy is loaded, whether the base may move |
-| **Skill** | `adibot_gr00t_client` (child process) + Nav2 | arm trajectories from a policy; base trajectories from a planner |
+| **Skill** | the inference client, `gr00t_client/` (child process) + Nav2 | arm trajectories from a policy; base trajectories from a planner |
 | **Hardware** | `openarm_bringup`, the vendor chassis stack, `ros2_control` | motors, encoders, CAN |
 
 The task layer never commands a motor, with one exception: `park_arms` publishes
@@ -43,7 +43,13 @@ orchestrator prints the warnings at startup.
 
 ## Why the inference client is a child process
 
-`adibot_gr00t_client` is a node that takes its policy from ROS parameters at
+> **Since 2026-09-28** the client is vendored in this repository
+> (`cerebel_orchestrator/gr00t_client/`, from groot_deployment v1.0.0) and has
+> gained the second approach below as an option, off by default:
+> `task_control`, used by `policy_switching: prompt`. The reasoning below is why
+> process switching stays the default until that is validated on hardware.
+
+The inference client is a node that takes its policy from ROS parameters at
 startup and runs until it is killed. To switch policies, something has to change
 those parameters, and there are three ways to do it:
 
