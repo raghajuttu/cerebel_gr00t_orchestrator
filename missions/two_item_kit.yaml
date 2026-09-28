@@ -1,40 +1,29 @@
 # Two items, one base move each way. The next increment after pick_then_place.
 #
 #   position 1  pick the lipstick  ->  place it
-#               park back to rest
 #   38 cm left  ->  position 2  ->  pick the oil
 #   38 cm right ->  position 1  ->  place it
-#               park
 #
-# Three prompts of one checkpoint, two base moves, and the one thing
-# pick_then_place never needed: a park that actually moves.
+# Three prompts of one checkpoint, two base moves, and NO PARK. The orchestrator
+# never commands the arms: the place demonstrations bring the arms back down
+# themselves, so every arm motion in this mission is a policy's. Between phases
+# the orchestrator only CHECKS -- `check_arms` before each drive, which aborts
+# rather than moving the base with the arms somewhere unexpected.
 #
-# WHY THE PARK IS REQUIRED HERE, not optional as it was before.
-#
-# A place leaves the arms at the `placed` pose. Every pick demonstration BEGINS
-# at the `ready` pose. Those are 0.65 rad apart on right joint5, so a second
-# pick starting from where a place ended begins outside every episode the policy
-# was trained on -- the skill-boundary mismatch this whole design exists to
-# avoid. So: place, park to rest, VERIFY, then pick.
-#
-# enable_park MUST be true:
+# RAN ON HARDWARE 2026-09-28, with no park (enable_park was false): both drives
+# measured 38.1 cm on the wheels, and the oil pick started from where the first
+# place ended and completed in 9.5 s.
 #
 #     ros2 launch cerebel_orchestrator orchestrator.launch.py \
-#         mission:=two_item_kit use_nav2:=false enable_park:=true
+#         mission:=two_item_kit use_nav2:=false
 #
-# With it false the park steps report success without moving, the `check_arms
-# ready` after each one FAILS, and the mission aborts before the base turns a
-# wheel. That is the intended behaviour -- a silent unparked pick is worse.
-#
-# BEFORE RUNNING, in this order:
+# BEFORE RUNNING:
 #   1. `move_only` must have worked. Movement first, alone.
-#   2. `pick_then_place` with enable_park:=true must have worked, so the ramp
-#      itself is proven on this hardware before a mission depends on it.
-#   3. The chassis bring-up must be up
+#   2. The chassis bring-up must be up
 #      (`ros2 launch chassis_control svtrobo_bringup.launch.py`):
 #      `/svtrobot_cmd` with a non-adapter subscriber, and `/all_wheel_rpm`
 #      publishing.
-#   4. Lipstick in tote 1, oil in tote 2. Clear floor between the positions.
+#   3. Lipstick in tote 1, oil in tote 2. Clear floor between the positions.
 
 name: two_item_kit
 frame_id: odom
@@ -96,10 +85,11 @@ steps:
             envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
     on_fail: continue
 
-  # Back to where picks start, and PROVE it. Without this the next pick begins
-  # 0.65 rad out on right joint5.
-  - {step: park_arms, profile: home}
-  - {step: check_arms, envelope: ready, seconds: 8.0, on_fail: abort}
+  # No park: the place policy brings the arms down itself. Before the base
+  # moves, confirm both hands are empty and the arms are where a place leaves
+  # them -- `on_fail: continue` above means a place that timed out still
+  # reaches this line, and this is what stops the drive if it went wrong.
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: abort}
 
   # ---------------- 38 cm left, to tote 2 ---------------------------------
   - {step: move_base, to: position_2, on_fail: retry, retries: 1}
@@ -110,8 +100,7 @@ steps:
   - step: run_policy
     policy: pick_oil
     until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
-    # No park between this pick and the drive home -- ramping the arms would
-    # drop the oil. `ends_parked` is the claim that the pick finishes somewhere
+    # Nothing between this pick and the drive home. `ends_parked` is the claim that the pick finishes somewhere
     # drive-safe, and check_arms is what measures whether it did, including
     # whether the object is still held.
     ends_parked: true
@@ -128,7 +117,7 @@ steps:
             envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
     on_fail: continue
 
-  - {step: park_arms, profile: home}
-  - {step: check_arms, envelope: ready, seconds: 8.0}
+  # Both hands empty: the oil went in the box, not on the floor.
+  - {step: check_arms, envelope: travel, seconds: 8.0}
 
 repeat: 1
