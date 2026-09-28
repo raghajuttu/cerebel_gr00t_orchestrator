@@ -1,100 +1,72 @@
-# One kit: three items, three totes, three stations, one box.
+# The whole kit: three items, three totes, one box.
 #
-# The shape of the task:
+#   position 1  pick the lipstick  ->  place it
+#   38 cm left  ->  position 2  ->  pick the oil
+#   38 cm right ->  position 1  ->  place it
+#   76 cm left  ->  position 3  ->  pick the tissue
+#   76 cm right ->  position 1  ->  place it
 #
-#   at position 1  ->  left arm picks from tote 1  ->  the place policy hands the
-#   object to the right arm, presents it to the scanner and puts it in the box
-#   ->  drive to position 2  ->  pick from tote 2  ->  drive back to position 1
-#   HOLDING THE OBJECT  ->  place it  ->  drive to position 3  ->  pick from
-#   tote 3  ->  drive back to position 1 holding it  ->  place it.
+# two_item_kit (which ran on hardware 2026-09-28) plus the tissue. Built the
+# same way: NO PARK -- the place demonstrations bring the arms down themselves,
+# so every arm motion here is a policy's -- and between phases the orchestrator
+# only CHECKS: `check_arms` before every drive, which aborts rather than moving
+# the base with the arms somewhere unexpected or the object gone.
 #
-# Position 1 carries tote 1, the scanner and the box, which is why every place
-# happens there and why the robot always comes home before placing.
+# Every place happens at position 1, where tote 1, the scanner and the box are,
+# and each pick at its own tote's position -- exactly how the demonstrations
+# were recorded (lipstick at spot 1, oil at spot 2, tissue at spot 3, every
+# place at spot 1). So the robot always drives home before placing.
 #
-# **The base is driven by wheel-arc integration, not Nav2.** See
-# docs/NAVIGATION.md and cerebel_orchestrator/base_move.py: this chassis
-# publishes no odometry and no transform, so there is nothing for Nav2 to close
-# its loop on. A `move_base` step drives until the wheels have turned the right
-# distance and stops. It is dead reckoning and it does not correct itself.
+# ASSUMED LAYOUT -- confirm before the first run: one straight row, each tote
+# 38 cm further LEFT than the last, so position 3 is 76 cm left of position 1.
+# If tote 3 is somewhere else, change position_3 below; the move distances all
+# follow from it.
 #
-# NUMBERS TO REPLACE BEFORE RUNNING -- every one of them:
-#   * positions.*.axis_cm   -- the layout below assumes a straight row,
-#                              1 -> 2 -> 3, 38 cm between neighbours. If
-#                              position 1 sits BETWEEN the other two, use
-#                              -38 and +38 instead. If the robot moves right
-#                              rather than left to reach position 2, negate
-#                              every number.
-#   * task_description      -- must match the training annotation VERBATIM
-#   * timeout_s             -- MEASURED from the dataset (p95 duration x2):
-#                              lipstick 40s, oil 25s, tissue 30s, place 55s
+# Run it with prompt switching (one client for the mission; see
+# docs/POLICY_SWITCHING.md) or without:
 #
-# `settled` is kept on every pick here because `ends_parked` requires it -- the
-# base drives afterwards and something has to say the arm stopped swinging.
-# MEASURED: at motion_eps 0.20 / hold_s 0.3 that fires in 91% of episodes; at
-# the old 0.05 / 0.5 it fired in 17%. If a pick still times out with "arms
-# never stopped moving", the answer is a `wait` step before the move, NOT a
-# lower motion_eps -- the demonstrations simply do not end at rest.
-#   * the `carry` and `travel` envelopes in params/arm_envelopes.yaml
-#   * move_scale_lateral in params/orchestrator.yaml -- 1.05 came off
-#                              move_base.py; re-measure it on this floor
+#     ros2 launch cerebel_orchestrator orchestrator.launch.py \
+#         mission:=three_station_kit use_nav2:=false \
+#         policy_switching:=prompt prompt_handover:=blend
 #
-# THE FOUR PROMPTS ARE REAL. Confirmed against
-# 20260923_pick_and_scan_and_place_01: meta/tasks.jsonl has exactly these four
-# strings, and every episode carries exactly one of them -- 50 lipstick, 50 oil,
-# 52 tissue, 150 place. One task per episode means each policy phase below
-# corresponds to a whole demonstrated behaviour, which is the cleanest case the
-# skill boundary can be in. The strings are copied verbatim, including "the".
+# Only the lipstick's pick -> place is a policy-to-policy switch, so that is
+# the only one blend or pause changes. Every other pick and place is followed
+# by a check or a drive, and the client is paused (and must acknowledge it)
+# before those.
+#
+# BEFORE RUNNING:
+#   1. The chassis bring-up must be up
+#      (`ros2 launch chassis_control svtrobo_bringup.launch.py`):
+#      `/svtrobot_cmd` with a non-adapter subscriber, `/all_wheel_rpm` publishing.
+#   2. Lipstick in tote 1, oil in tote 2, tissue in tote 3, placed as in the
+#      demonstrations. Box empty. Clear floor from position 1 to position 3.
+#   3. The robot standing at position 1. Nothing measures where it is: the
+#      axis is anchored by assertion (`start_position`), and every move is
+#      dead reckoning from there.
 
 name: three_station_kit
 frame_id: odom
 
-# Where the robot may stand, as centimetres along one line. Positive is left.
-# There is no frame here and no pose: a position is a distance from the start,
-# and `start_position` is what anchors it. That anchor is ASSUMED -- nothing on
-# this chassis can measure where it is standing, so the robot must actually be
-# at position 1 when the mission starts.
 positions:
-  position_1: {axis_cm: 0.0}     # tote 1 + scanner + box
-  position_2: {axis_cm: 38.0}    # tote 2
-  position_3: {axis_cm: 76.0}    # tote 3
+  position_1: {axis_cm: 0.0}     # tote 1 (lipstick) + scanner + box
+  position_2: {axis_cm: 38.0}    # tote 2 (oil), 38 cm to the LEFT
+  position_3: {axis_cm: 76.0}    # tote 3 (tissue), 76 cm to the LEFT -- ASSUMED, see above
 
 start_position: position_1
 
-# One checkpoint, four prompts -- all four entries point at the same
-# server_host:server_port. The orchestrator prints that grouping at startup so
-# it is visible before anything moves.
+# One checkpoint, four prompts, identical client parameters -- which is what
+# lets `policy_switching: prompt` run them all on one client. The strings are
+# the dataset's four annotations, verbatim.
 policies:
-  # --- the three picks: left arm, into the left gripper --------------------
-  #
-  # Both arms are enabled even though only the left one picks. The place phase
-  # begins with a handover, so the right arm has to be wherever the training
-  # episodes left it at the end of the pick. Disabling it would freeze it at
-  # whatever pose it held when the phase started, and the handover would begin
-  # from a pose the policy has never seen. If a pick run shows the right arm
-  # doing something unwanted, that is the setting to revisit -- with the
-  # dataset, not by guessing.
   pick_lipstick:
     task_description: "pick up the lipstick"
     server_host: 192.168.8.153
     server_port: 5555
-    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    checkpoint_label: "pick_scan_place"
     params: &policy_params
-      # THE VALIDATED RTC CONFIGURATION, sized from the 15-run scan_40_chunk
-      # latency set in adibot_gr00t_client docs/VALIDATION.md (round trip p50
-      # 239 ms / p95 273 / p99 343; in-flight skip p99 9 steps). Chunk length H
-      # is 40, and the invariants are frozen <= overlap <= prefetch_lead and
-      # execution_horizon <= H - overlap.
-      #
-      # THE EARLIER SETTINGS HERE WERE THE WORST CASE FOR SMOOTHNESS. With
-      # prefetch on and RTC off, their own A/B measured the seam at 72.1 mrad
-      # against 47.7 for blocking -- prefetch removes the PAUSE and worsens the
-      # JUMP, because each chunk is planned from scratch and disagrees with the
-      # one before it at their shared instants. And execution_horizon 16 re-plans
-      # every 0.53 s instead of 0.87 s, so there were more seams as well. Roughly
-      # two 4-degree snaps a second, which is what jitter looks like.
-      #
-      # RTC is what removes the jump: the new chunk is grown out of the old
-      # one's tail, and the first rtc_frozen_steps are held identical to it.
+      # The validated RTC configuration (round trip p50 239 ms / p95 273 ms;
+      # chunk length 40; frozen <= overlap <= prefetch_lead). Same as every
+      # mission that has run on the robot.
       execution_horizon: 26
       prefetch_enable: true
       rtc_enable: true
@@ -102,14 +74,9 @@ policies:
       rtc_overlap_steps: 14
       rtc_frozen_steps: 10
       rtc_ramp_rate: 5.0
-      #
-      # NEEDS THE SERVER PATCH. Without server/gr00t_policy.py v3 on the GPU box
-      # RTC is silently inert and the client says so at startup -- check the
-      # banner. And watch rtc_frozen_overrun in the run sidecar: the D run saw
-      # warnings there, because frozen 10 had only a one-step margin over the
-      # measured p99 skip of 9. If it climbs, go to frozen 12 / overlap 16 /
-      # prefetch_lead 18, which is the doc's own next step.
       enable_limits: false
+      # Both arms enabled even though only the left one picks: the place begins
+      # with a handover, from wherever the pick left the right arm.
       enable_right_arm: true
       enable_right_gripper: true
 
@@ -117,99 +84,98 @@ policies:
     task_description: "pick up the oil"
     server_host: 192.168.8.153
     server_port: 5555
-    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    checkpoint_label: "pick_scan_place"
     params: *policy_params
 
   pick_tissue:
     task_description: "pick up the tissue"
     server_host: 192.168.8.153
     server_port: 5555
-    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    checkpoint_label: "pick_scan_place"
     params: *policy_params
 
-  # --- the place: handover, scan, box -------------------------------------
-  #
-  # One phase covering three sub-actions, so its timeout is much longer than a
-  # pick's. It ends when the RIGHT gripper opens -- which it can only do after
-  # it has closed, during the handover. That is the monitor's arming rule doing
-  # the work: `grasp: open` cannot fire on the starting pose, because the right
-  # gripper has to have been seen closed first.
   place_and_scan:
     task_description: "scan and place the object"
     server_host: 192.168.8.153
     server_port: 5555
-    checkpoint_label: "pick_scan_place"   # <- label only; set it to the real checkpoint name
+    checkpoint_label: "pick_scan_place"
     params: *policy_params
 
 steps:
-  # Start from a known pose. The mission cannot know what the arms were doing
-  # before it began, and it is about to drive.
-  - {step: park_arms, profile: home}
-  - {step: check_arms, envelope: home, seconds: 5.0}
-
-  # ---------------- position 1: tote 1 ------------------------------------
-  # No move: the robot starts here, and tote 1, the scanner and the box are all
-  # within reach.
-  - {step: park_arms, profile: ready}
+  # ---------------- item 1: the lipstick, at position 1 --------------------
+  # MEASURED, 50 lipstick episodes: p95 19.2 s -> 30 s cap. Ends when the object
+  # is held AND the arm has lifted it clear (the gripper alone fires at 44% of
+  # a lipstick episode, arm still in the tote).
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 40.0, grasp: closed, side: left, settled: true, hold_s: 0.3}
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
     on_fail: abort
 
+  # MEASURED, 150 place episodes: p95 26.4 s -> 55 s cap. Ends when the right
+  # gripper opens after the handover AND both arms are inside the pose a place
+  # ends at AND they have stopped. On hardware: 16.9-21.7 s.
   - step: run_policy
     policy: place_and_scan
-    until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
-    on_fail: abort
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
 
-  # Empty-handed and about to drive, so park properly.
-  - {step: park_arms, profile: travel}
-  - {step: check_arms, envelope: travel, seconds: 5.0}
+  # Both hands empty and the arms where a place leaves them, before the drive.
+  # `on_fail: continue` above means a place that timed out still reaches here,
+  # and this is what stops the base if it went wrong.
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: abort}
 
-  # ---------------- position 2: tote 2 ------------------------------------
+  # ---------------- item 2: the oil, at position 2 -------------------------
   - {step: move_base, to: position_2, on_fail: retry, retries: 1}
-  - {step: park_arms, profile: ready}
+
+  # MEASURED, 50 oil episodes: p95 11.4 s -> 25 s cap. On hardware: 9.5 s.
   - step: run_policy
     policy: pick_oil
-    until: {timeout_s: 25.0, grasp: closed, side: left, settled: true, hold_s: 0.3}
-    # There is deliberately no park between this pick and the drive home --
-    # ramping the arms to a parked pose would drop what the gripper is holding.
-    # `ends_parked` is the claim that the policy finishes somewhere drive-safe;
-    # the check_arms below is what measures whether it actually did, including
-    # whether the object is still in the gripper.
+    until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    # Nothing between this pick and the drive home: the object stays in the
+    # gripper, and check_arms measures that it is still held and the arm is
+    # tucked enough to drive.
     ends_parked: true
     on_fail: abort
-  - {step: check_arms, envelope: carry, seconds: 5.0}
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: abort}
 
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
+
   - step: run_policy
     policy: place_and_scan
-    until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
-    on_fail: abort
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: abort}
 
-  - {step: park_arms, profile: travel}
-  - {step: check_arms, envelope: travel, seconds: 5.0}
-
-  # ---------------- position 3: tote 3 ------------------------------------
+  # ---------------- item 3: the tissue, at position 3 ----------------------
+  # One drive of 76 cm. Dead reckoning, so its error is about twice a 38 cm
+  # move's -- the two 38 cm moves on hardware each read 38.1 cm on the wheels.
   - {step: move_base, to: position_3, on_fail: retry, retries: 1}
-  - {step: park_arms, profile: ready}
+
+  # 30 s cap, the tissue figure from this file's earlier measurement (p95 x2),
+  # not re-measured since. `carry` and `grasp_close_m` WERE measured over all
+  # 152 pick episodes, tissue's 52 included, and fire in 152 of 152 on replay.
+  # This is the first tissue pick the orchestrator has run.
   - step: run_policy
     policy: pick_tissue
-    until: {timeout_s: 30.0, grasp: closed, side: left, settled: true, hold_s: 0.3}
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
     ends_parked: true
     on_fail: abort
-  - {step: check_arms, envelope: carry, seconds: 5.0}
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: abort}
 
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
+
   - step: run_policy
     policy: place_and_scan
-    until: {timeout_s: 55.0, grasp: open, side: right, settled: true, hold_s: 0.3}
-    on_fail: abort
+    until: {timeout_s: 55.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
 
-  # Kit complete. Tuck down where the mission started.
-  - {step: park_arms, profile: home}
-  - {step: check_arms, envelope: home, seconds: 5.0}
+  # Kit complete: both hands empty, the tissue in the box, not on the floor.
+  - {step: check_arms, envelope: travel, seconds: 8.0}
 
-# One kit per run to begin with. Raise it once a single cycle is reliable --
-# and watch the axis drift in /orchestrator/status as it climbs, because
-# nothing in this configuration corrects it between cycles.
+# One kit per run. Before raising it: nothing corrects the base's position
+# between cycles, and a second cycle's first pick would start from where the
+# last place ended rather than from rest.
 repeat: 1
