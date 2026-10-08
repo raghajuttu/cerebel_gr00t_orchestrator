@@ -257,7 +257,7 @@ def test_the_shipped_pick_and_carry_mission_is_clean():
     from cerebel_orchestrator.mission import navigate_safety_warnings
 
     root = pathlib.Path(__file__).resolve().parent.parent
-    mission = Mission.load(str(root / "missions" / "two_station_pick_place.yaml"))
+    mission = Mission.load(str(root / "extras" / "missions" / "two_station_pick_place.yaml"))
     assert navigate_safety_warnings(mission) == []
     # The drive to the place station happens with the object in hand: no park
     # between the pick policy and that navigate.
