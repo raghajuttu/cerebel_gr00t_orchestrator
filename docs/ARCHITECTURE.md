@@ -155,7 +155,7 @@ answered in `tests/`.
 The split also means a mission file can be validated anywhere:
 
 ```bash
-python -m cerebel_orchestrator.mission missions/two_station_pick_place.yaml
+python -m cerebel_orchestrator.mission missions/three_station_kit.yaml
 ```
 
 ## Frames
