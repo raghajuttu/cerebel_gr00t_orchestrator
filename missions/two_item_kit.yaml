@@ -41,19 +41,22 @@ policies:
     server_port: 5555
     checkpoint_label: "pick_scan_place"
     params: &policy_params
-      # 2026-10-08: horizon 40, lead 19. With the whole 40-step chunk queued,
-      # each chunk runs (40 - prefetch_lead) = 21 steps before the next one
-      # replaces it: ~1 frozen + 4 ramp + 16 freshly planned at the measured
-      # 9-tick round trip (18 fresh if replies are slower). Simulated in
-      # tests/test_client_node_loop.py's harness. A LARGER lead fires the next
-      # request earlier and runs FEWER steps (lead 26 -> 9 fresh). Keep
-      # frozen <= overlap <= prefetch_lead.
+      # 2026-10-08: horizon 40, lead 16, overlap 16, frozen 12, ramp 2.0.
+      # Each chunk runs (40 - prefetch_lead) = 24 steps before the next one
+      # replaces it: 4 frozen + 4 ramp + 16 freshly planned at the measured
+      # median skip of 8 steps. MEASURED on the robot with frozen 10: skip
+      # median 8, max 15 -- only 2 frozen steps survived the round trip, so
+      # the seam landed almost straight in the ramp and the arm jumped there.
+      # Frozen 12 leaves 4. Simulated in tests/test_client_node_loop.py's
+      # harness: no seam overruns up to a 12-tick round trip (frozen 10 had
+      # 27). Fresh steps = skip + 40 - lead - overlap; a LARGER lead runs
+      # FEWER steps. Keep frozen <= overlap <= prefetch_lead.
       execution_horizon: 40
       prefetch_enable: true
       rtc_enable: true
-      prefetch_lead: 19
-      rtc_overlap_steps: 14
-      rtc_frozen_steps: 10
+      prefetch_lead: 16
+      rtc_overlap_steps: 16
+      rtc_frozen_steps: 12
       rtc_ramp_rate: 2.0    # 2026-10-08: softer handover; ramp weights 0.38 0.64 0.81 0.92 (5.0 was 0.64 0.87 0.96 0.99)
       enable_limits: false
       enable_right_arm: true
