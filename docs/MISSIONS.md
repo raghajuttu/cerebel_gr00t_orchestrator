@@ -3,7 +3,7 @@
 A mission is data. Validate one without a robot:
 
 ```bash
-python -m cerebel_orchestrator.mission missions/two_station_pick_place.yaml
+python -m cerebel_orchestrator.mission missions/three_station_kit.yaml
 # or, on the robot:
 ros2 run cerebel_orchestrator mission_check <path>
 ```
@@ -202,6 +202,10 @@ legitimate reason to skip parking.
 
 | File | Purpose |
 |---|---|
-| `nav_only.yaml` | base only: left, home, right, home. No policy, no arm motion. The first thing to run on hardware |
-| `policy_only.yaml` | one policy phase, operator-terminated, no base motion. The second |
-| `two_station_pick_place.yaml` | the real task |
+| `move_only.yaml` | base only: 38 cm left and back. No policy, no arm motion |
+| `pick_then_place.yaml` | one pick and its place at position 1, no base motion |
+| `two_item_kit.yaml` | lipstick at position 1, oil from position 2, both placed at 1 |
+| `three_station_kit.yaml` | the full kit: lipstick, oil and tissue from positions 1-3, every place at 1 |
+
+Older missions (`nav_only`, `policy_only`, `two_station_pick_place`) are in
+`extras/missions/` and are not installed.
