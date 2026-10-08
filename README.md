@@ -136,19 +136,24 @@ any hint of the wheel kinematics — then writes a `base_adapter` parameter file
 from what it found. [docs/HARDWARE_PROBE.md](docs/HARDWARE_PROBE.md) explains how
 to read it.
 
-**2. Rehearse the whole mission against mocks.** No robot, no GPU box, real Nav2.
+**2. Rehearse a mission with nothing moving** (`dry_run` mocks the policy and
+the base):
 
 ```bash
-ros2 launch cerebel_orchestrator desk_test.launch.py mission:=two_station_pick_place
+ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=three_station_kit use_nav2:=false dry_run:=true
 ```
 
-**3. Then the real thing, in this order** — base alone, policy alone, both:
+**3. Then the real thing, in this order** — base alone, one pick and place, the
+full kit:
 
 ```bash
-ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=nav_only
-ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=policy_only use_nav2:=false
-ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=two_station_pick_place
+ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=move_only use_nav2:=false
+ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=pick_then_place use_nav2:=false policy_switching:=prompt prompt_handover:=pause
+ros2 launch cerebel_orchestrator orchestrator.launch.py mission:=three_station_kit use_nav2:=false policy_switching:=prompt prompt_handover:=pause
 ```
+
+Missions that move the base need the chassis bring-up running first
+(`ros2 launch chassis_control svtrobo_bringup.launch.py`).
 
 Nothing moves until you call `~/start`, unless `auto_start:=true`.
 [docs/BRINGUP.md](docs/BRINGUP.md) is the full sequence with the checks at each
@@ -190,7 +195,8 @@ e-stop, which cuts power.
 | `cerebel_orchestrator/fake_base.py`, `fake_arm.py` | the mocks the desk test runs against |
 | `params/nav2_diff_drive.yaml`, `nav2_holonomic.yaml` | Nav2 without SLAM, one file per wheel type |
 | `params/orchestrator.yaml`, `park_poses.yaml`, `arm_envelopes.yaml` | everything tunable, with every placeholder marked |
-| `missions/` | `nav_only`, `policy_only`, `two_station_pick_place` |
+| `missions/` | `move_only`, `pick_then_place`, `two_item_kit`, `three_station_kit` |
+| `extras/` | files no current run uses — older missions, the desk test, an analysis tool ([extras/README.md](extras/README.md)) |
 
 ## Documentation
 
