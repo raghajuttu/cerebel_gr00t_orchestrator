@@ -2,15 +2,16 @@
 
     # rehearse a mission with nothing moving
     ros2 launch cerebel_orchestrator orchestrator.launch.py \\
-        mission:=two_station_pick_place dry_run:=true
+        mission:=three_station_kit use_nav2:=false dry_run:=true
 
     # base only, on hardware, arms untouched
     ros2 launch cerebel_orchestrator orchestrator.launch.py \\
-        mission:=nav_only auto_start:=false
+        mission:=move_only use_nav2:=false
 
-    # the real thing, once every step has been proven on its own
+    # the full kit: one client, prompts switched with a pause between them
     ros2 launch cerebel_orchestrator orchestrator.launch.py \\
-        mission:=two_station_pick_place enable_park:=true auto_start:=false
+        mission:=three_station_kit use_nav2:=false \\
+        policy_switching:=prompt prompt_handover:=pause
 
 ``mission`` takes either a bare name from this package's ``missions/`` directory
 or an absolute path. Nothing starts moving until ``~/start`` is called unless
