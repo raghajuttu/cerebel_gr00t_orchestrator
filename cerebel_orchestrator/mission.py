@@ -4,7 +4,7 @@ A mission is data, not code. It names the base poses the robot drives to, the
 GR00T policy sessions it runs there, and the order of both. Nothing in here
 imports ROS, so a mission can be validated on a laptop:
 
-    python -m cerebel_orchestrator.mission missions/two_station_pick_place.yaml
+    python -m cerebel_orchestrator.mission missions/three_station_kit.yaml
 
 Validation is deliberately strict and loud. A mission that names a station or a
 policy that does not exist, or a policy phase with no timeout, is a mission that
