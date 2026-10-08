@@ -74,20 +74,22 @@ policies:
     params: &policy_params
       # RTC configuration (round trip p50 239 ms / p95 273 ms; chunk length
       # 40; frozen <= overlap <= prefetch_lead). Same in every mission.
-      # 2026-10-08: horizon 40, lead 19. With the whole 40-step chunk queued,
-      # each chunk runs (40 - prefetch_lead) = 21 steps before the next one
-      # replaces it: ~1 frozen + 4 ramp + 16 freshly planned at the measured
-      # 9-tick round trip (18 fresh if replies are slower). Simulated in
-      # tests/test_client_node_loop.py's harness. A LARGER lead fires the next
-      # request earlier and runs FEWER steps (lead 26 -> 9 fresh). Keep
-      # frozen <= overlap <= prefetch_lead.
+      # 2026-10-08: horizon 40, lead 20, overlap 14, frozen 10, ramp 5.0 --
+      # exactly run D_both_new_7 of experiments/04_09_2026, the cleanest
+      # horizon-40 run with working RTC: seam step 28 mrad (1.11x a normal
+      # step), seam p95 47 mrad, no frozen overruns. Lead 18 in the same set
+      # overran on 6-17% of chunks. Each chunk runs (40 - prefetch_lead) = 20
+      # steps before the next one replaces it; a LARGER lead runs FEWER.
+      # Keep frozen <= overlap <= prefetch_lead. Tried and reverted the same
+      # day: frozen 12 / overlap 16 / lead 16 (picks hit the tote), and ramp
+      # 2.0 (untested in any experiment).
       execution_horizon: 40
       prefetch_enable: true
       rtc_enable: true
-      prefetch_lead: 19
+      prefetch_lead: 20
       rtc_overlap_steps: 14
       rtc_frozen_steps: 10
-      rtc_ramp_rate: 2.0    # 2026-10-08: softer handover; ramp weights 0.38 0.64 0.81 0.92 (5.0 was 0.64 0.87 0.96 0.99)
+      rtc_ramp_rate: 5.0
       enable_limits: false
       # Both arms enabled even though only the left one picks: the place begins
       # with a handover, from wherever the pick left the right arm.
