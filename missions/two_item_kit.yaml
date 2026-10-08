@@ -54,7 +54,7 @@ policies:
       prefetch_lead: 19
       rtc_overlap_steps: 14
       rtc_frozen_steps: 10
-      rtc_ramp_rate: 5.0
+      rtc_ramp_rate: 2.0    # 2026-10-08: softer handover; ramp weights 0.38 0.64 0.81 0.92 (5.0 was 0.64 0.87 0.96 0.99)
       enable_limits: false
       enable_right_arm: true
       enable_right_gripper: true
