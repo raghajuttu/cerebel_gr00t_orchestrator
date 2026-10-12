@@ -16,10 +16,15 @@
 #
 # LENIENT, ON PURPOSE: every phase and check is `on_fail: continue` -- a
 # failure is logged in the summary and the mission goes on. The operator is the
-# stop. The thresholds and envelopes were MEASURED on the previous dataset
-# (20260923_pick_and_scan_and_place_01), not this one; the transfer and place
-# timeouts are estimates. If a phase ends at the wrong moment or times out,
-# send the parquet files and they get re-measured.
+# stop.
+#
+# MEASURED 2026-10-12 on data/3 (the transfer and place half of the atomic
+# dataset, 300 episodes), by replaying every episode through the orchestrator's
+# own PhaseMonitor: the transfer condition fires in 149/150, the place
+# condition in 147/150 (see carry_atomic, handed_over and placed_atomic in
+# params/arm_envelopes.yaml). The PICK episodes are not in data/3: the pick
+# still ends on the finger thresholds of the previous dataset, with an envelope
+# widened to where the new transfers begin.
 #
 # BEFORE RUNNING: lipstick in tote 1, box empty, robot at position 1, arms at
 # rest.
@@ -65,35 +70,37 @@ policies:
     params: *policy_params
 
 steps:
-  # PICK: ends when the object is held AND the arm has lifted it clear -- the
-  # same condition as the previous checkpoint's pick (30 s cap, lipstick p95
-  # 19.2 s there).
+  # PICK: ends when the object is held AND the arm is in the carry pose
+  # (carry_atomic: the old carry plus where the new transfers begin). 30 s cap,
+  # from the previous checkpoint's lipstick pick (p95 19.2 s).
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
     on_fail: continue
 
   # TRANSFER: ends when the RIGHT gripper has closed on the object AND the LEFT
   # one has let go (envelope `handed_over`). The right gripper starts open, so
-  # `grasp: closed` arms at once. 30 s cap: an ESTIMATE -- the old
-  # handover + scan + place took p95 26.4 s in total.
+  # `grasp: closed` arms at once. MEASURED: transfer the lipstick p95 15.5 s ->
+  # 30 s cap; fires in 50/50 lipstick transfers, median 63% of the episode.
   - step: run_policy
     policy: transfer_lipstick
     until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
     on_fail: continue
 
   # PLACE: scan, then into the box. Ends when the right gripper opens AND both
-  # arms are in the pose a place ends at AND they have stopped -- the same
-  # condition as the previous checkpoint's place. The right gripper starts
-  # closed (holding the object), so `grasp: open` arms at once. 45 s cap: an
-  # ESTIMATE.
+  # arms are in the pose a place ends at (placed_atomic) AND they have stopped
+  # (under 0.10 rad over 1 s: the demonstrations end while still moving, and
+  # 0.06 fired in only 123/150). The right gripper starts closed (holding the
+  # object), so `grasp: open` arms at once. MEASURED: place the lipstick p95
+  # 17.8 s; the 45 s cap is lenient. Fires in 49/50 lipstick places.
   - step: run_policy
     policy: place_lipstick
     until: {timeout_s: 45.0, grasp: open, side: right,
-            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+            envelope: placed_atomic, settled: true, still_spread: 0.10, hold_s: 1.0}
     on_fail: continue
 
-  # Both hands empty: the lipstick went in the box.
-  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
+  # Both hands empty and the arms where a place ends: the lipstick went in the
+  # box (placed_atomic contains 150/150 place endings).
+  - {step: check_arms, envelope: placed_atomic, seconds: 8.0, on_fail: continue}
 
 repeat: 1
