@@ -206,6 +206,8 @@ legitimate reason to skip parking.
 | `pick_then_place.yaml` | one pick and its place at position 1, no base motion |
 | `two_item_kit.yaml` | lipstick at position 1, oil from position 2, both placed at 1 |
 | `three_station_kit.yaml` | the full kit: lipstick, oil and tissue from positions 1-3, every place at 1 |
+| `atomic_kit_one.yaml` | ATOMIC checkpoint (20261010_pick_and_place_02): pick, transfer, place the lipstick at position 1, no base motion |
+| `atomic_kit.yaml` | ATOMIC checkpoint: the full kit, pick / transfer / place for each object, in the recorded order |
 
 Older missions (`nav_only`, `policy_only`, `two_station_pick_place`) are in
 `extras/missions/` and are not installed.
