@@ -1,0 +1,99 @@
+# One object, the atomic way, at position 1. The base never moves.
+#
+#   pick up the lipstick  ->  transfer the lipstick  ->  place the lipstick
+#
+# For the ATOMIC checkpoint trained on 20261010_pick_and_place_02, whose nine
+# tasks split the old "scan and place the object" into a transfer (left hand to
+# right hand) and a place (scan, then into the box). Run this before
+# atomic_kit: it exercises every new phase boundary without the base.
+#
+#     ros2 launch cerebel_orchestrator orchestrator.launch.py \
+#         mission:=atomic_kit_one use_nav2:=false
+#
+# Prompt switching with a PAUSE between phases is set below, so no launch
+# arguments are needed for it: one client for the mission, each phase starts
+# from rest. (Blend broke the handover on the previous checkpoint.)
+#
+# LENIENT, ON PURPOSE: every phase and check is `on_fail: continue` -- a
+# failure is logged in the summary and the mission goes on. The operator is the
+# stop. The thresholds and envelopes were MEASURED on the previous dataset
+# (20260923_pick_and_scan_and_place_01), not this one; the transfer and place
+# timeouts are estimates. If a phase ends at the wrong moment or times out,
+# send the parquet files and they get re-measured.
+#
+# BEFORE RUNNING: lipstick in tote 1, box empty, robot at position 1, arms at
+# rest.
+
+name: atomic_kit_one
+frame_id: odom
+
+policy_switching: prompt
+prompt_blend: false
+
+policies:
+  pick_lipstick:
+    task_description: "pick up the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"   # label only, for the run logs
+    params: &policy_params
+      # The RTC settings in use on the robot: run D_7 of experiments/04_09_2026
+      # (see the note in three_station_kit.yaml).
+      execution_horizon: 40
+      prefetch_enable: true
+      rtc_enable: true
+      prefetch_lead: 20
+      rtc_overlap_steps: 14
+      rtc_frozen_steps: 10
+      rtc_ramp_rate: 5.0
+      enable_limits: false
+      enable_right_arm: true
+      enable_right_gripper: true
+
+  transfer_lipstick:
+    task_description: "transfer the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+
+  place_lipstick:
+    task_description: "place the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+
+steps:
+  # PICK: ends when the object is held AND the arm has lifted it clear -- the
+  # same condition as the previous checkpoint's pick (30 s cap, lipstick p95
+  # 19.2 s there).
+  - step: run_policy
+    policy: pick_lipstick
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    on_fail: continue
+
+  # TRANSFER: ends when the RIGHT gripper has closed on the object AND the LEFT
+  # one has let go (envelope `handed_over`). The right gripper starts open, so
+  # `grasp: closed` arms at once. 30 s cap: an ESTIMATE -- the old
+  # handover + scan + place took p95 26.4 s in total.
+  - step: run_policy
+    policy: transfer_lipstick
+    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    on_fail: continue
+
+  # PLACE: scan, then into the box. Ends when the right gripper opens AND both
+  # arms are in the pose a place ends at AND they have stopped -- the same
+  # condition as the previous checkpoint's place. The right gripper starts
+  # closed (holding the object), so `grasp: open` arms at once. 45 s cap: an
+  # ESTIMATE.
+  - step: run_policy
+    policy: place_lipstick
+    until: {timeout_s: 45.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+
+  # Both hands empty: the lipstick went in the box.
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
+
+repeat: 1
