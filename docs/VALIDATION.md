@@ -82,8 +82,8 @@ change.
 * **Every `move_base` step.** Nothing has driven the base under the
   orchestrator. `move_only` exists to test it alone and to measure where the
   robot actually stops, which is the only way to know whether
-  `move_scale_lateral: 1.05` — measured on a different floor in
-  `move_base/move_base.py` — transfers.
+  `move_scale_left` / `move_scale_right` (0.97 / 1.01, set on the robot
+  2026-10-12) are right.
 * **`base_adapter` against the real chassis.** The interlock, the zero-holding,
   the fail-closed timeout, the crab trim: all unexercised. The chassis has no
   command watchdog, so the adapter's gate is the only thing that stops the

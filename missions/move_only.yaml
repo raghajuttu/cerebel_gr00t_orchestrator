@@ -57,14 +57,14 @@ policies: {}
 
 steps:
   # Left 38 cm. The move ends when the wheels have turned 38 cm of arc, scaled
-  # by move_scale_lateral (1.05, measured in move_base/move_base.py -- re-measure
-  # it on this floor). It fails if wheel feedback stops, freezes, or never
+  # by move_scale_left (params/orchestrator.yaml; move_scale_right for the way
+  # back). It fails if wheel feedback stops, freezes, or never
   # arrives.
   - {step: move_base, to: position_2, on_fail: abort}
 
   # Long enough to see where it actually stopped and measure the error by hand.
   # That measurement is the whole point of this mission: it tells you whether
-  # move_scale_lateral is right for this surface.
+  # move_scale_left and move_scale_right are right for this surface.
   - {step: wait, seconds: 5.0}
 
   # And back, so the next run starts from the same place.
