@@ -93,6 +93,19 @@ def test_the_axis_chooses_its_own_scale():
     assert mover.travelled_m == pytest.approx(2 * WHEEL_PERIMETER_M, abs=0.1)
 
 
+@pytest.mark.parametrize("distance, scale", [(10.0, 0.5), (-10.0, 2.0)])
+def test_left_and_right_have_their_own_scale(distance, scale):
+    mover = BaseMover(config(scale_lateral=1.0, scale_left=0.5, scale_right=2.0))
+    mover.start(distance, "lateral", now=0.0)
+    drive(mover, rpm=60.0, seconds=1.0)
+    assert abs(mover.travelled_m) == pytest.approx(scale * WHEEL_PERIMETER_M, abs=0.1)
+
+
+def test_config_rejects_a_nonsense_side_scale():
+    with pytest.raises(ValueError, match="scale factors"):
+        BaseMoveConfig(scale_right=0.0).validate()
+
+
 def test_travelled_is_signed_but_distance_is_not():
     mover = BaseMover(config(scale_lateral=1.0))
     mover.start(-10.0, "lateral", now=0.0)         # a move to the right

@@ -74,7 +74,9 @@ class BaseMoveConfig:
 
     ``scale`` is the calibration coefficient, measured divided by integrated.
     It differs per axis because the mechanics do: ``move_base.py`` measured 1.02
-    forward and back, 1.05 left and right. The crab correction is **not** here;
+    forward and back, 1.05 left and right. Left and right can differ too:
+    ``scale_left`` / ``scale_right`` override ``scale_lateral`` for that
+    direction when set. The crab correction is **not** here;
     it is a property of the twist rather than of the distance, so it lives in
     ``base_adapter`` where the last word on what reaches the wheels is.
     """
@@ -85,6 +87,8 @@ class BaseMoveConfig:
     taper_m: float = 0.15            # start easing off this far from target
     taper_floor: float = 0.35        # never taper below this fraction of speed
     scale_lateral: float = 1.05      # measured / integrated, left and right
+    scale_left: Optional[float] = None   # None -> scale_lateral
+    scale_right: Optional[float] = None  # None -> scale_lateral
     scale_axial: float = 1.02        # measured / integrated, forward and back
     tolerance_m: float = 0.01        # how close counts as arrived
 
@@ -100,7 +104,8 @@ class BaseMoveConfig:
             raise ValueError("taper_m must be >= 0 (0 disables the taper)")
         if not 0.0 < self.taper_floor <= 1.0:
             raise ValueError("taper_floor must be in (0, 1]")
-        if self.scale_lateral <= 0 or self.scale_axial <= 0:
+        scales = (self.scale_lateral, self.scale_axial, self.scale_left, self.scale_right)
+        if any(s is not None and s <= 0 for s in scales):
             raise ValueError("scale factors must be positive")
         if self.tolerance_m <= 0:
             raise ValueError("tolerance_m must be positive")
@@ -154,9 +159,7 @@ class BaseMover:
         self._sign = 1 if distance_m >= 0 else -1
         self._target_m = abs(distance_m)
         self._travelled_m = 0.0
-        self._scale = (
-            self.config.scale_lateral if axis == "lateral" else self.config.scale_axial
-        )
+        self._scale = self._scale_for(axis, self._sign)
         self._started_at = now
         self._last_sample_at = None
         self._last_values = None
@@ -165,6 +168,12 @@ class BaseMover:
         if self._target_m <= self.config.tolerance_m:
             self._done = (True, f"already within {self.config.tolerance_m * 100:.1f} cm")
         return None
+
+    def _scale_for(self, axis: str, sign: int) -> float:
+        if axis == "axial":
+            return self.config.scale_axial
+        side = self.config.scale_left if sign > 0 else self.config.scale_right
+        return self.config.scale_lateral if side is None else side
 
     @property
     def active(self) -> bool:
