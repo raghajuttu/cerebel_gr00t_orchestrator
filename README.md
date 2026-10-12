@@ -195,7 +195,7 @@ e-stop, which cuts power.
 | `cerebel_orchestrator/fake_base.py`, `fake_arm.py` | the mocks the desk test runs against |
 | `params/nav2_diff_drive.yaml`, `nav2_holonomic.yaml` | Nav2 without SLAM, one file per wheel type |
 | `params/orchestrator.yaml`, `park_poses.yaml`, `arm_envelopes.yaml` | everything tunable, with every placeholder marked |
-| `missions/` | `move_only`, `pick_then_place`, `two_item_kit`, `three_station_kit` |
+| `missions/` | `move_only`, `pick_then_place`, `two_item_kit`, `three_station_kit`; for the atomic checkpoint `atomic_kit_one`, `atomic_kit` |
 | `extras/` | files no current run uses — older missions, the desk test, an analysis tool ([extras/README.md](extras/README.md)) |
 
 ## Documentation
