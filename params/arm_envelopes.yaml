@@ -222,10 +222,14 @@ envelopes:
       p1..p99 + 0.15 of the FIRST frame of all 150 transfer episodes of data/3 --
       where a transfer begins is where the pick before it has to leave the arms.
       The old carry contained only 111/150 of those transfer starts, almost all
-      the misses on right joint3 (the right arm sits differently in the new
-      recordings), which would stop an atomic pick from ever counting as done.
-      This one contains 149/150. The pick episodes themselves are not in data/3;
-      re-measure from them when available.
+      the misses on right joint3; this one contains 149/150. The atomic
+      checkpoint's PICKS are the old pick episodes, and on them this envelope
+      fires 152/152 (the old carry 151/152) -- so the widening only adds
+      tolerance; it is not a fix for a pick that failed with the old carry.
+      Note what the measurement shows: the old picks END with right joint3 at
+      about -0.9..-0.2, the new transfers START it at about -0.6..+0.6, so on
+      the robot every transfer begins from a right-arm pose many of its
+      demonstrations did not.
     joints:
       openarm_left_joint1:         [-0.494, +0.366]
       openarm_left_joint2:         [-0.664, +0.033]
