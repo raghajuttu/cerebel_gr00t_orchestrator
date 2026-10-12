@@ -1,0 +1,185 @@
+# The whole kit with the ATOMIC checkpoint: three objects, each picked at its
+# own tote, then transferred and placed at position 1.
+#
+#   position 1  pick lipstick  ->  transfer lipstick  ->  place lipstick
+#   38 cm left  ->  position 2  ->  pick oil
+#   38 cm right ->  position 1  ->  transfer oil  ->  place oil
+#   76 cm left  ->  position 3  ->  pick tissue
+#   76 cm right ->  position 1  ->  transfer tissue  ->  place tissue
+#
+# The same order the demonstrations of 20261010_pick_and_place_02 were
+# recorded in. Run atomic_kit_one first: it tests the new transfer and place
+# boundaries without the base.
+#
+#     ros2 launch cerebel_orchestrator orchestrator.launch.py \
+#         mission:=atomic_kit use_nav2:=false
+#
+# Prompt switching with a PAUSE between phases is set below: one client for
+# the mission, each phase starts from rest. Before every drive the client is
+# paused and must acknowledge it.
+#
+# LENIENT, ON PURPOSE: every phase and check is `on_fail: continue`; only a
+# base move that fails twice stops the mission. The operator is the stop. The
+# thresholds and envelopes were MEASURED on the previous dataset, not this one,
+# and the transfer and place timeouts are estimates (see atomic_kit_one.yaml).
+#
+# BEFORE RUNNING:
+#   1. The chassis bring-up must be up
+#      (`ros2 launch chassis_control svtrobo_bringup.launch.py`).
+#   2. Lipstick in tote 1, oil in tote 2, tissue in tote 3. Box empty. Clear
+#      floor from position 1 to position 3.
+#   3. The robot at position 1 -- nothing measures where it is.
+
+name: atomic_kit
+frame_id: odom
+
+policy_switching: prompt
+prompt_blend: false
+
+positions:
+  position_1: {axis_cm: 0.0}     # tote 1 (lipstick) + scanner + box
+  position_2: {axis_cm: 38.0}    # tote 2 (oil), 38 cm to the LEFT
+  position_3: {axis_cm: 76.0}    # tote 3 (tissue), 76 cm to the LEFT
+
+start_position: position_1
+
+# One checkpoint, nine prompts -- the nine annotations of
+# 20261010_pick_and_place_02's meta/tasks.jsonl, verbatim.
+policies:
+  pick_lipstick:
+    task_description: "pick up the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"   # label only, for the run logs
+    params: &policy_params
+      # The RTC settings in use on the robot: run D_7 of experiments/04_09_2026
+      # (see the note in three_station_kit.yaml).
+      execution_horizon: 40
+      prefetch_enable: true
+      rtc_enable: true
+      prefetch_lead: 20
+      rtc_overlap_steps: 14
+      rtc_frozen_steps: 10
+      rtc_ramp_rate: 5.0
+      enable_limits: false
+      enable_right_arm: true
+      enable_right_gripper: true
+  pick_oil:
+    task_description: "pick up the oil"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  pick_tissue:
+    task_description: "pick up the tissue"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  transfer_lipstick:
+    task_description: "transfer the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  transfer_oil:
+    task_description: "transfer the oil"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  transfer_tissue:
+    task_description: "transfer the tissue"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  place_lipstick:
+    task_description: "place the lipstick"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  place_oil:
+    task_description: "place the oil"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+  place_tissue:
+    task_description: "place the tissue"
+    server_host: 192.168.8.153
+    server_port: 5555
+    checkpoint_label: "pick_and_place_02"
+    params: *policy_params
+
+# How each kind of phase ends (same for all three objects):
+#   pick      left gripper closed AND arm lifted clear (envelope carry), 0.5 s
+#   transfer  right gripper closed AND left gripper open (envelope
+#             handed_over), 0.5 s
+#   place     right gripper open AND arms at the place-end pose (envelope
+#             placed) AND stopped, 1 s
+# Pick caps are the previous checkpoint's measured ones (lipstick 30 s, oil
+# 25 s, tissue 30 s); transfer 30 s and place 45 s are estimates.
+steps:
+  # ---------------- item 1: the lipstick, at position 1 --------------------
+  - step: run_policy
+    policy: pick_lipstick
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    on_fail: continue
+  - step: run_policy
+    policy: transfer_lipstick
+    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    on_fail: continue
+  - step: run_policy
+    policy: place_lipstick
+    until: {timeout_s: 45.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+  # Both hands empty before the drive (logged, never stops the run).
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
+
+  # ---------------- item 2: the oil, picked at position 2 ------------------
+  - {step: move_base, to: position_2, on_fail: retry, retries: 1}
+  - step: run_policy
+    policy: pick_oil
+    until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    # The oil stays in the left hand for the drive home.
+    ends_parked: true
+    on_fail: continue
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: continue}
+  - {step: move_base, to: position_1, on_fail: retry, retries: 1}
+  - step: run_policy
+    policy: transfer_oil
+    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    on_fail: continue
+  - step: run_policy
+    policy: place_oil
+    until: {timeout_s: 45.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
+
+  # ---------------- item 3: the tissue, picked at position 3 ---------------
+  - {step: move_base, to: position_3, on_fail: retry, retries: 1}
+  - step: run_policy
+    policy: pick_tissue
+    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry, hold_s: 0.5}
+    ends_parked: true
+    on_fail: continue
+  - {step: check_arms, envelope: carry, seconds: 5.0, on_fail: continue}
+  - {step: move_base, to: position_1, on_fail: retry, retries: 1}
+  - step: run_policy
+    policy: transfer_tissue
+    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    on_fail: continue
+  - step: run_policy
+    policy: place_tissue
+    until: {timeout_s: 45.0, grasp: open, side: right,
+            envelope: placed, settled: true, still_spread: 0.06, hold_s: 1.0}
+    on_fail: continue
+
+  # Kit complete: both hands empty.
+  - {step: check_arms, envelope: travel, seconds: 8.0, on_fail: continue}
+
+repeat: 1
