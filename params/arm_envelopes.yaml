@@ -184,3 +184,21 @@ envelopes:
       openarm_right_joint6:        [-0.769,  0.227]
       openarm_right_joint7:        [-0.815,  0.006]
       openarm_right_finger_joint1: [ 0.035,  0.060]
+
+  handed_over:
+    description: >
+      The object has changed hands: the RIGHT gripper is closed on it and the
+      LEFT gripper has let go. Ends a `transfer the ...` phase of the atomic
+      missions (atomic_kit_one, atomic_kit), ANDed with `grasp: closed` on the
+      right side.
+
+      Fingers only -- the arms are left free, because where the handover
+      happens varies with the object. The bounds reuse the finger ranges
+      measured from 20260923_pick_and_scan_and_place_01 (closed on an object
+      0.006-0.019 m, open 0.045-0.050 m), widened: closed means at or below
+      grasp_close_m (0.025), open means at or above 0.035. NOT yet measured from
+      the atomic dataset (20261010_pick_and_place_02) -- re-measure if a
+      transfer times out with the object visibly in the right hand.
+    joints:
+      openarm_left_finger_joint1:  [ 0.035,  0.060]
+      openarm_right_finger_joint1: [ 0.000,  0.025]
