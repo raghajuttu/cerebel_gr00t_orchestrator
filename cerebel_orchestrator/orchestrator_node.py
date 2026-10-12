@@ -112,7 +112,8 @@ class OrchestratorNode(Node):
         self.declare_parameter("move_speed_mps", 0.10)
         self.declare_parameter("move_min_speed_mps", 0.03)
         self.declare_parameter("move_taper_m", 0.15)
-        self.declare_parameter("move_scale_lateral", 1.05)
+        self.declare_parameter("move_scale_left", 1.05)
+        self.declare_parameter("move_scale_right", 1.05)
         self.declare_parameter("move_scale_axial", 1.02)
         self.declare_parameter("move_tolerance_m", 0.01)
         self.declare_parameter("move_timeout_s", 60.0)
@@ -223,7 +224,8 @@ class OrchestratorNode(Node):
                 speed_mps=float(get("move_speed_mps").value),
                 min_speed_mps=float(get("move_min_speed_mps").value),
                 taper_m=float(get("move_taper_m").value),
-                scale_lateral=float(get("move_scale_lateral").value),
+                scale_left=float(get("move_scale_left").value),
+                scale_right=float(get("move_scale_right").value),
                 scale_axial=float(get("move_scale_axial").value),
                 tolerance_m=float(get("move_tolerance_m").value),
             )

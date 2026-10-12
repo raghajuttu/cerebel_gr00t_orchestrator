@@ -37,10 +37,12 @@ orchestrator:
     move_speed_mps: 0.10             # move_base.py's translation default
     move_min_speed_mps: 0.03         # below this the 1 rpm deadband truncates
     move_taper_m: 0.15               # ease off this far out, to cut overshoot
-    # Calibration coefficients: measured distance / integrated distance. These
-    # came off move_base.py, which measured them on hardware. RE-MEASURE on the
-    # floor this robot actually runs on -- they are surface-dependent.
-    move_scale_lateral: 1.05
+    # Calibration coefficients: measured distance / integrated distance,
+    # surface-dependent. Left and right separately: set on the robot
+    # 2026-10-12 (move_base.py's 1.05 for both was measured on another floor).
+    # Raise one if that direction overshoots, lower it if it falls short.
+    move_scale_left: 0.97
+    move_scale_right: 1.01
     move_scale_axial: 1.02
     move_tolerance_m: 0.01
     move_timeout_s: 60.0
