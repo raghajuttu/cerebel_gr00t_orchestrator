@@ -120,22 +120,35 @@ policies:
 #   place     right gripper open AND arms at the place-end pose (placed_atomic)
 #             AND stopped (under 0.10 rad over 1 s), 1 s
 # Replayed on data/3: transfer fires in 50/50 lipstick, 50/50 oil, 49/50
-# tissue; place in 49/50 each. Caps: picks are the previous checkpoint's
-# (lipstick 30 s, oil 25 s, tissue 30 s); transfers p95 13.8-15.5 s -> 30 s;
-# places p95 14.9-17.8 s -> 45 s (lenient).
+# tissue; place in 49/50 each. carry_atomic and placed_atomic were widened on
+# 2026-10-13 (see arm_envelopes.yaml): a phase ends the moment its conditions
+# hold, and the caps -- picks and transfers 40 s, places 55 s -- are only a
+# guard for a phase that never gets there.
+# min_finger 0.005 on the lipstick and oil picks and transfers: a gripper that
+# closes on air reads 0.0006-0.0017 m, a held lipstick or oil never below
+# 0.0085, so an empty close followed by a lift does not count as a pick. Not on
+# the tissue -- it squashes, and a held tissue reads down to 0.0028.
 steps:
+  # GO TO READY, once, before the first pick: a slow, smooth move (minimum-jerk,
+  # peak max_joint_speed, ~5 s from the bring-up pose) to where the pick
+  # demonstrations begin, grippers opened at the end. `enable: true` moves the
+  # arms for this step even though enable_park stays false for every other
+  # mission. on_fail: continue -- if it cannot run, the pick starts from
+  # wherever the arms are, as it did before.
+  - {step: park_arms, profile: ready_atomic, enable: true, on_fail: continue}
+
   # ---------------- item 1: the lipstick, at position 1 --------------------
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: left, envelope: carry_atomic, min_finger: 0.005, hold_s: 0.5}
     on_fail: continue
   - step: run_policy
     policy: transfer_lipstick
-    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: right, envelope: handed_over, min_finger: 0.005, hold_s: 0.5}
     on_fail: continue
   - step: run_policy
     policy: place_lipstick
-    until: {timeout_s: 45.0, grasp: open, side: right,
+    until: {timeout_s: 55.0, grasp: open, side: right,
             envelope: placed_atomic, settled: true, still_spread: 0.10, hold_s: 1.0}
     on_fail: continue
   # Both hands empty before the drive (logged, never stops the run).
@@ -145,7 +158,7 @@ steps:
   - {step: move_base, to: position_2, on_fail: retry, retries: 1}
   - step: run_policy
     policy: pick_oil
-    until: {timeout_s: 25.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: left, envelope: carry_atomic, min_finger: 0.005, hold_s: 0.5}
     # The oil stays in the left hand for the drive home.
     ends_parked: true
     on_fail: continue
@@ -153,11 +166,11 @@ steps:
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
   - step: run_policy
     policy: transfer_oil
-    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: right, envelope: handed_over, min_finger: 0.005, hold_s: 0.5}
     on_fail: continue
   - step: run_policy
     policy: place_oil
-    until: {timeout_s: 45.0, grasp: open, side: right,
+    until: {timeout_s: 55.0, grasp: open, side: right,
             envelope: placed_atomic, settled: true, still_spread: 0.10, hold_s: 1.0}
     on_fail: continue
   - {step: check_arms, envelope: placed_atomic, seconds: 8.0, on_fail: continue}
@@ -166,18 +179,18 @@ steps:
   - {step: move_base, to: position_3, on_fail: retry, retries: 1}
   - step: run_policy
     policy: pick_tissue
-    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
     ends_parked: true
     on_fail: continue
   - {step: check_arms, envelope: carry_atomic, seconds: 5.0, on_fail: continue}
   - {step: move_base, to: position_1, on_fail: retry, retries: 1}
   - step: run_policy
     policy: transfer_tissue
-    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
     on_fail: continue
   - step: run_policy
     policy: place_tissue
-    until: {timeout_s: 45.0, grasp: open, side: right,
+    until: {timeout_s: 55.0, grasp: open, side: right,
             envelope: placed_atomic, settled: true, still_spread: 0.10, hold_s: 1.0}
     on_fail: continue
 
