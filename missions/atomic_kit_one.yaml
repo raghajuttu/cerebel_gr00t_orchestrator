@@ -70,21 +70,30 @@ policies:
     params: *policy_params
 
 steps:
+  # GO TO READY, once, before the first pick: a slow, smooth move (minimum-jerk,
+  # peak max_joint_speed, ~5 s from the bring-up pose) to where the pick
+  # demonstrations begin, grippers opened at the end. `enable: true` moves the
+  # arms for this step even though enable_park stays false for every other
+  # mission. on_fail: continue -- if it cannot run, the pick starts from
+  # wherever the arms are, as it did before.
+  - {step: park_arms, profile: ready_atomic, enable: true, on_fail: continue}
+
   # PICK: ends when the object is held AND the arm is in the carry pose
-  # (carry_atomic: the old carry plus where the new transfers begin). 30 s cap,
-  # from the previous checkpoint's lipstick pick (p95 19.2 s).
+  # (carry_atomic, widened 2026-10-13). 40 s cap, only a guard -- the phase ends
+  # as soon as the conditions hold. min_finger 0.005: an empty close reads
+  # 0.0006-0.0017 m, a held lipstick never below 0.0085.
   - step: run_policy
     policy: pick_lipstick
-    until: {timeout_s: 30.0, grasp: closed, side: left, envelope: carry_atomic, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: left, envelope: carry_atomic, min_finger: 0.005, hold_s: 0.5}
     on_fail: continue
 
   # TRANSFER: ends when the RIGHT gripper has closed on the object AND the LEFT
   # one has let go (envelope `handed_over`). The right gripper starts open, so
   # `grasp: closed` arms at once. MEASURED: transfer the lipstick p95 15.5 s ->
-  # 30 s cap; fires in 50/50 lipstick transfers, median 63% of the episode.
+  # 40 s cap; fires in 50/50 lipstick transfers, median 63% of the episode.
   - step: run_policy
     policy: transfer_lipstick
-    until: {timeout_s: 30.0, grasp: closed, side: right, envelope: handed_over, hold_s: 0.5}
+    until: {timeout_s: 40.0, grasp: closed, side: right, envelope: handed_over, min_finger: 0.005, hold_s: 0.5}
     on_fail: continue
 
   # PLACE: scan, then into the box. Ends when the right gripper opens AND both
@@ -92,10 +101,10 @@ steps:
   # (under 0.10 rad over 1 s: the demonstrations end while still moving, and
   # 0.06 fired in only 123/150). The right gripper starts closed (holding the
   # object), so `grasp: open` arms at once. MEASURED: place the lipstick p95
-  # 17.8 s; the 45 s cap is lenient. Fires in 49/50 lipstick places.
+  # 17.8 s; the 55 s cap is lenient. Fires in 49/50 lipstick places.
   - step: run_policy
     policy: place_lipstick
-    until: {timeout_s: 45.0, grasp: open, side: right,
+    until: {timeout_s: 55.0, grasp: open, side: right,
             envelope: placed_atomic, settled: true, still_spread: 0.10, hold_s: 1.0}
     on_fail: continue
 
