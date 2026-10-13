@@ -58,6 +58,29 @@ def test_the_other_side_is_not_watched():
     assert monitor.update(1.3, state(left_finger=0.040, right_finger=0.001)).done
 
 
+def test_a_close_on_air_is_not_a_grasp_when_min_finger_is_set():
+    # The 2026-10-13 oil pick: closed to 0.0017 on nothing, lifted, reopened,
+    # and only the third close (0.0142) held the object.
+    until = Until(timeout_s=30, grasp="closed", side="left", min_finger=0.004, hold_s=0.5)
+    monitor = PhaseMonitor(until, CFG, start_time=0.0)
+    monitor.update(0.0, state(left_finger=0.040))                    # arms
+    assert not monitor.update(0.1, state(left_finger=0.0017)).done
+    assert not monitor.update(1.0, state(left_finger=0.0017)).done   # held, but empty
+    monitor.update(1.2, state(left_finger=0.040))                    # reopens
+    monitor.update(1.4, state(left_finger=0.0090))                   # real grasp
+    verdict = monitor.update(2.0, state(left_finger=0.0090))
+    assert verdict.done and verdict.ok
+
+
+def test_a_close_on_air_says_so_at_the_timeout():
+    until = Until(timeout_s=2, grasp="closed", side="left", min_finger=0.004, hold_s=0.5)
+    monitor = PhaseMonitor(until, CFG, start_time=0.0)
+    monitor.update(0.0, state(left_finger=0.040))
+    verdict = monitor.update(2.0, state(left_finger=0.0010))
+    assert verdict.done and not verdict.ok
+    assert "closed on nothing" in verdict.reason
+
+
 def test_open_grasp_is_the_mirror_case():
     until = Until(timeout_s=30, grasp="open", side="left", hold_s=0.2)
     monitor = PhaseMonitor(until, CFG, start_time=0.0)
