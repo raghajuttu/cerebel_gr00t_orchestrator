@@ -67,6 +67,14 @@ FEEDBACK_GAP_S = 0.5             # no sample for this long mid-move -> abort
 STALE_LIMIT_S = 1.0              # identical samples while moving -> CAN down
 NO_FEEDBACK_START_S = 2.0        # never heard from the chassis at all -> abort
 
+# The runaway guard. Wheel feedback that under-reads drives the base past its
+# target with nothing else to stop it, so a move may last at most
+# OVERRUN_FACTOR x (distance / cruise speed) + OVERRUN_MARGIN_S. The margin
+# covers the taper and the chassis getting going: 38 cm at 0.10 m/s takes
+# about 5 s and is allowed 10.6 s.
+OVERRUN_FACTOR = 2.0
+OVERRUN_MARGIN_S = 3.0
+
 
 @dataclass(frozen=True)
 class BaseMoveConfig:
@@ -138,6 +146,7 @@ class BaseMover:
         self._travelled_m = 0.0
         self._scale = config.scale_lateral
         self._started_at: Optional[float] = None
+        self._allowed_s = 0.0
         self._last_sample_at: Optional[float] = None
         self._last_values: Optional[List[float]] = None
         self._stale_since: Optional[float] = None
@@ -161,6 +170,9 @@ class BaseMover:
         self._travelled_m = 0.0
         self._scale = self._scale_for(axis, self._sign)
         self._started_at = now
+        self._allowed_s = (
+            OVERRUN_FACTOR * self._target_m / self.config.speed_mps + OVERRUN_MARGIN_S
+        )
         self._last_sample_at = None
         self._last_values = None
         self._stale_since = None
@@ -215,8 +227,12 @@ class BaseMover:
         spinning = mean_rpm > MOVING_RPM
 
         if self._last_sample_at is not None:
-            dt = now - self._last_sample_at
-            if 0.0 < dt < MAX_DT_S:
+            # Capped, not dropped. The interval is measured when the callback
+            # runs, so a busy executor delivers samples in bursts; dropping
+            # every interval over the cap threw away ground the wheels really
+            # covered, and the base drove past its target.
+            dt = min(now - self._last_sample_at, MAX_DT_S)
+            if dt > 0.0:
                 self._travelled_m += (mean_rpm / 60.0) * WHEEL_PERIMETER_M * self._scale * dt
 
         # A dropped CAN link leaves the rpm publisher repeating its last frame
@@ -281,6 +297,15 @@ class BaseMover:
     def _check_feedback(self, now: float) -> None:
         """Abort rather than drive blind. The chassis has no watchdog."""
         if self._done is not None or self._started_at is None:
+            return
+        if now - self._started_at > self._allowed_s:
+            self._done = (
+                False,
+                f"move overran: {now - self._started_at:.1f}s for "
+                f"{self._target_m * 100.0:.1f} cm (allowed {self._allowed_s:.1f}s), "
+                f"wheels counted {self._travelled_m * 100.0:.1f} cm -- "
+                "the wheel feedback is under-reading",
+            )
             return
         if self._last_sample_at is None:
             if now - self._started_at > NO_FEEDBACK_START_S:

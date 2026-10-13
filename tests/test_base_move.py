@@ -10,6 +10,7 @@ import pytest
 
 from cerebel_orchestrator.base_move import (
     FEEDBACK_GAP_S,
+    MAX_DT_S,
     MOVING_RPM,
     NO_FEEDBACK_START_S,
     STALE_LIMIT_S,
@@ -113,13 +114,44 @@ def test_travelled_is_signed_but_distance_is_not():
     assert mover.travelled_m < 0, "a rightward move must book a negative arc"
 
 
-def test_a_long_gap_between_samples_is_not_integrated():
+def test_a_long_gap_between_samples_counts_only_up_to_the_cap():
     """A dropped packet must not be read as a metre of travel."""
     mover = BaseMover(config(scale_lateral=1.0))
     mover.start(10.0, "lateral", now=0.0)
     mover.observe(0.0, [60.0] * 4)
     mover.observe(5.0, [60.0] * 4)                 # 5 s gap, way over MAX_DT_S
-    assert mover.travelled_m == pytest.approx(0.0)
+    assert mover.travelled_m == pytest.approx(MAX_DT_S * WHEEL_PERIMETER_M)
+
+
+def test_slow_feedback_is_still_counted():
+    """Samples 0.25 s apart -- a 4 Hz stream, or a busy executor -- used to be
+    dropped entirely, and the base drove on past its target."""
+    mover = BaseMover(config(scale_lateral=1.0))
+    mover.start(10.0, "lateral", now=0.0)
+    for i in range(5):
+        mover.observe(0.25 * i, [60.0] * 4)
+    # Four intervals, each counted as MAX_DT_S.
+    assert mover.travelled_m == pytest.approx(4 * MAX_DT_S * WHEEL_PERIMETER_M)
+
+
+def test_a_move_that_overruns_its_time_aborts():
+    # 0.38 m at 0.10 m/s: allowed 2 x 3.8 s + 3 s = 10.6 s.
+    mover = BaseMover(config(scale_lateral=1.0))
+    mover.start(0.38, "lateral", now=0.0)
+    # Live feedback that reads far too low: changing every sample, so it is
+    # not a freeze, but it would take minutes to count 38 cm.
+    now = 0.0
+    for i in range(210):                           # 10.5 s at 20 Hz
+        now += 0.05
+        mover.observe(now, [MOVING_RPM * 1.5 + 0.01 * (i % 2)] * 4)
+        assert mover.step(now) is not None
+    assert mover.outcome(now) is None
+    now += 0.2
+    mover.observe(now, [MOVING_RPM * 1.5] * 4)
+    assert mover.step(now) is None, "an overrun move must stop sending twists"
+    outcome = mover.outcome(now)
+    assert outcome is not None and outcome[0] is False
+    assert "overran" in outcome[1]
 
 
 # -- direction ---------------------------------------------------------------
