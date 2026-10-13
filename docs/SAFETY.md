@@ -91,12 +91,17 @@ from, and the first few runs are the ones it was not measured from.
 `park_arms` is the only place the orchestrator commands the arms, and it is
 **disabled by default**. With `enable_park: false` a park step logs what it would
 have done and reports success without moving — so a mission can be rehearsed end
-to end before anything is at stake.
+to end before anything is at stake. The one exception is a step that says
+`enable: true` itself: the atomic missions' first step, a go-to-ready before the
+first pick, moves the arms whatever `enable_park` says.
 
-What it does when enabled: a linear ramp in joint space from the measured pose to
-the target, at `max_joint_speed` rad/s, published to the same
-`forward_position_controller` topics the inference client uses, followed by one
-`GripperCommand` goal per side.
+What it does when enabled: a straight line in joint space from the measured pose
+to the target, timed by a minimum-jerk profile (starting and ending at rest,
+peaking at `max_joint_speed` rad/s halfway, lasting at least
+`park_min_duration_s`), published to the same `forward_position_controller`
+topics the inference client uses, followed by one `GripperCommand` goal per side.
+It counts as parked once every arm joint is within `park_tolerance` (0.15 rad,
+above the follower's standing 0.05-0.12 rad lag behind its command).
 
 What it does **not** do:
 
