@@ -55,6 +55,24 @@ profiles:
     left_gripper: 0.0483
     right_gripper: 0.0496
 
+  ready_atomic:
+    # Where the ATOMIC checkpoint's picks begin: the median frame-0 ACTION of
+    # all 150 pick episodes of 20261010_pick_and_place_02 (data/, episodes
+    # 0-149, calibration 1009test). The action, not the state, because a park
+    # commands the arm and the follower settles a little short of its command;
+    # at this resting pose the two differ by at most 0.024 rad.
+    #
+    # The atomic missions go here once, before the first pick. After bring-up
+    # the arms read all-zero with both grippers closed -- a pose no pick
+    # demonstration starts from -- and on 2026-10-13 the first pick spent
+    # ~10 s opening the grippers and creeping the elbows up before it began
+    # picking. The 2nd and 3rd picks, which start near this pose, began moving
+    # within 0.3-0.7 s.
+    left_arm:  [ 0.0648, -0.1112,  0.3686,  0.4367, -0.3008,  0.0244,  0.1781]
+    right_arm: [ 0.0841,  0.0472, -0.1133,  0.2315, -0.1116, -0.3052, -0.5332]
+    left_gripper: 0.0500
+    right_gripper: 0.0500
+
   travel:
     # A tucked pose for missions that park before driving rather than carrying
     # the object in the policy's own carry pose. NOT used by the shipped
