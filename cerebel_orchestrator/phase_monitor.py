@@ -393,7 +393,10 @@ class PhaseMonitor:
         if finger is None:
             return None
         if self.until.grasp == "closed":
-            at_target = finger <= self.config.grasp_close_m
+            # Closed on something, not on air: an empty close shuts past the
+            # floor (see Until.min_finger) and does not count.
+            floor = self.until.min_finger or 0.0
+            at_target = floor <= finger <= self.config.grasp_close_m
             at_opposite = finger >= self.config.grasp_open_m
         else:
             at_target = finger >= self.config.grasp_open_m
@@ -512,6 +515,9 @@ class PhaseMonitor:
             finger = self._finger()
             where = "no joint_states" if finger is None else f"finger at {finger:.4f} m"
             armed = "armed" if self._grasp_armed else "never armed"
+            if (finger is not None and self.until.min_finger is not None
+                    and finger < self.until.min_finger):
+                where += f", below min_finger {self.until.min_finger:.4f} -- closed on nothing"
             bits.append(f"grasp {self.until.side} {self.until.grasp} {armed}, {where}")
         if self.until.settled:
             if not self._motion_seen:
