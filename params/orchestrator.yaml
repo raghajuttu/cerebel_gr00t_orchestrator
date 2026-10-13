@@ -143,8 +143,16 @@ orchestrator:
     # params/park_poses.yaml on the real robot before turning this on.
     enable_park: false
     park_poses_file: ""          # "" -> the built-in all-zeros fallback
-    max_joint_speed: 0.15        # rad/s, per joint, linear ramp
-    park_tolerance: 0.01         # rad, worst single joint, to call it parked
+    # A park is a smooth (minimum-jerk) move: it starts and stops at rest and
+    # peaks at max_joint_speed halfway. 0.20 takes ~5 s from the bring-up pose
+    # to `ready_atomic` (largest joint move ~0.53 rad); 0.12 would take ~8 s, judged
+    # too slow. The smoothness comes from the profile, not the
+    # speed: the move still starts and ends at rest.
+    max_joint_speed: 0.20        # rad/s, per joint, PEAK speed of the move
+    park_min_duration_s: 3.0     # never faster than this, however short the move
+    # Must exceed the follower's standing lag behind its command (0.05-0.12
+    # rad, it never decays) -- at 0.01 a park could never converge.
+    park_tolerance: 0.15         # rad, worst single joint, to call it parked
     park_timeout_s: 60.0
     gripper_max_effort: 10.0     # matches the inference client's validated value
     command_grippers: true
