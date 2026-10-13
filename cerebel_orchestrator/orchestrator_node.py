@@ -116,7 +116,7 @@ class OrchestratorNode(Node):
         self.declare_parameter("move_scale_right", 1.05)
         self.declare_parameter("move_scale_axial", 1.02)
         self.declare_parameter("move_tolerance_m", 0.01)
-        self.declare_parameter("move_timeout_s", 60.0)
+        self.declare_parameter("move_timeout_s", 20.0)
 
         self.declare_parameter("nav_action", "navigate_to_pose")
         self.declare_parameter("nav_timeout_s", 120.0)

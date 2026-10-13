@@ -45,7 +45,7 @@ orchestrator:
     move_scale_right: 1.01
     move_scale_axial: 1.02
     move_tolerance_m: 0.01
-    move_timeout_s: 60.0
+    move_timeout_s: 20.0           # backstop; base_move.py also aborts a move that overruns 2x its time + 3 s
     nav_server_wait_s: 20.0
 
     # -- policies -----------------------------------------------------------
