@@ -163,7 +163,8 @@ class OrchestratorNode(Node):
         self.declare_parameter("enable_park", False)
         self.declare_parameter("park_poses_file", "")
         self.declare_parameter("max_joint_speed", 0.15)
-        self.declare_parameter("park_tolerance", 0.01)
+        self.declare_parameter("park_tolerance", 0.15)
+        self.declare_parameter("park_min_duration_s", 3.0)
         self.declare_parameter("park_timeout_s", 60.0)
         self.declare_parameter("gripper_max_effort", 10.0)
         self.declare_parameter("command_grippers", True)
@@ -257,6 +258,7 @@ class OrchestratorNode(Node):
             max_joint_speed=float(get("max_joint_speed").value),
             gripper_max_effort=float(get("gripper_max_effort").value),
             tolerance=float(get("park_tolerance").value),
+            min_duration_s=float(get("park_min_duration_s").value),
             command_grippers=bool(get("command_grippers").value),
         )
         self._check_mission_park_profiles()
@@ -883,7 +885,7 @@ class OrchestratorNode(Node):
 
         if action.kind == "park_arms":
             assert action.profile is not None
-            error = self.parker.start(action.profile)
+            error = self.parker.start(action.profile, force=action.step.park_enable)
             if error is not None:
                 self._end_action(action, False, error)
             return
