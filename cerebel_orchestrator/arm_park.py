@@ -13,11 +13,15 @@ so a mission can be rehearsed end to end before anything moves. Enable it only
 once the poses in ``params/park_poses.yaml`` have been checked on the real robot,
 joint by joint, at a crawl.
 
-The motion is a pure linear ramp in joint space from the measured pose to the
-target, at ``max_joint_speed`` rad/s, published at ``rate_hz``. There is no
-collision checking and no planning: a park pose has to be reachable from
-anywhere the policy can leave the arm by moving every joint monotonically. Keep
-the poses conservative -- arms tucked, elbows low -- and keep the speed low.
+The motion is a straight line in joint space from the measured pose to the
+target, timed by a minimum-jerk profile: every joint starts from rest, speeds
+up gently, peaks at ``max_joint_speed`` rad/s halfway, and eases into the target
+at rest. A linear ramp jumps to full speed on its first tick and stops dead on
+its last, which the arm shows as a snap at both ends. The duration is set by
+the joint with the furthest to go, never shorter than ``min_duration_s``.
+There is no collision checking and no planning: a park pose has to be reachable
+from anywhere the policy can leave the arm by moving every joint monotonically.
+Keep the poses conservative -- arms tucked, elbows low -- and keep the speed low.
 
 Standalone use, for checking a pose before trusting it in a mission:
 
@@ -63,6 +67,21 @@ FALLBACK_POSE = {
     "left_gripper": 0.04,
     "right_gripper": 0.04,
 }
+
+# A minimum-jerk move's peak speed is this many times its average speed
+# (d/ds of 10s^3 - 15s^4 + 6s^5 at s = 0.5). The duration is stretched by it so
+# that `max_joint_speed` stays the true peak, not the average.
+MIN_JERK_PEAK = 1.875
+
+
+def min_jerk(fraction: float) -> float:
+    """Position along a rest-to-rest move, 0..1, for elapsed time 0..1.
+
+    Zero speed and zero acceleration at both ends, so the arm neither jerks
+    into motion nor slams to a stop.
+    """
+    s = min(1.0, max(0.0, fraction))
+    return s * s * s * (10.0 + s * (-15.0 + 6.0 * s))
 
 
 class ParkPose:
@@ -119,7 +138,8 @@ class ArmParker:
         enable: bool,
         max_joint_speed: float = 0.15,
         gripper_max_effort: float = 10.0,
-        tolerance: float = 0.01,
+        tolerance: float = 0.15,
+        min_duration_s: float = 3.0,
         left_topic: str = "/left_forward_position_controller/commands",
         right_topic: str = "/right_forward_position_controller/commands",
         left_gripper_action: str = "/left_gripper_controller/gripper_cmd",
@@ -133,6 +153,7 @@ class ArmParker:
         self.max_joint_speed = max_joint_speed
         self.gripper_max_effort = gripper_max_effort
         self.tolerance = tolerance
+        self.min_duration_s = min_duration_s
         self.command_grippers = command_grippers
 
         self._left_pub = node.create_publisher(Float64MultiArray, left_topic, 10)
@@ -165,12 +186,17 @@ class ArmParker:
 
     # -- the ramp ------------------------------------------------------------
 
-    def start(self, profile: str) -> Optional[str]:
-        """Begin a park. Returns an error string if it cannot start."""
+    def start(self, profile: str, force: bool = False) -> Optional[str]:
+        """Begin a park. Returns an error string if it cannot start.
+
+        ``force`` moves the arms even with ``enable_park`` false: the mission
+        asked for this one park by name (``enable: true`` on the step), which
+        is a narrower decision than switching every park in every mission on.
+        """
         pose = self.poses.get(profile)
         if pose is None:
             return f"no park profile named {profile!r} (have {sorted(self.poses)})"
-        if not self.enable:
+        if not (self.enable or force):
             self.log.warning(
                 f"park [{profile}] SKIPPED: enable_park is false. The arms stay "
                 "where the policy left them."
@@ -189,12 +215,15 @@ class ArmParker:
             for side in ("left", "right")
             for i in range(ARM_SLICE[side].start, ARM_SLICE[side].stop)
         )
-        self._duration = travel / max(self.max_joint_speed, 1e-6)
+        self._duration = max(
+            self.min_duration_s,
+            MIN_JERK_PEAK * travel / max(self.max_joint_speed, 1e-6),
+        )
         self._start_time = self._now()
         self._gripper_sent = False
         self.log.info(
-            f"park [{profile}]: largest joint move {travel:.3f} rad, "
-            f"ramping over {self._duration:.1f}s at {self.max_joint_speed} rad/s"
+            f"park [{profile}]: largest joint move {travel:.3f} rad, smooth "
+            f"move over {self._duration:.1f}s, peak {self.max_joint_speed} rad/s"
         )
         return None
 
@@ -210,8 +239,9 @@ class ArmParker:
         if self._target is None or self._start_time is None:
             return
         target = self._target.as_canonical()
+        progress = min_jerk(self._fraction())
         command = [
-            origin + (goal - origin) * self._fraction()
+            origin + (goal - origin) * progress
             for origin, goal in zip(self._origin or target, target)
         ]
         self._publish_arms(command)
@@ -239,7 +269,10 @@ class ArmParker:
         if error <= self.tolerance:
             return (True, f"parked [{self._target.name}], worst joint error {error:.4f} rad")
         # The controller may still be catching up; give it the tolerance window
-        # rather than declaring a failure on the first tick past the ramp.
+        # rather than declaring a failure on the first tick past the ramp. The
+        # tolerance has to exceed the follower's standing lag behind its
+        # command (0.05-0.12 rad, and it never decays): at the old 0.01 a park
+        # could never converge.
         if self._now() - self._start_time > self._duration + 2.0:
             return (
                 False,
@@ -318,7 +351,8 @@ class ArmParkNode(Node):
         self.declare_parameter("park_poses_file", "")
         self.declare_parameter("max_joint_speed", 0.15)
         self.declare_parameter("gripper_max_effort", 10.0)
-        self.declare_parameter("park_tolerance", 0.01)
+        self.declare_parameter("park_tolerance", 0.15)
+        self.declare_parameter("park_min_duration_s", 3.0)
         self.declare_parameter("command_grippers", True)
         self.declare_parameter("state_wait_s", 5.0)
 
@@ -331,6 +365,7 @@ class ArmParkNode(Node):
             max_joint_speed=float(get("max_joint_speed").value),
             gripper_max_effort=float(get("gripper_max_effort").value),
             tolerance=float(get("park_tolerance").value),
+            min_duration_s=float(get("park_min_duration_s").value),
             command_grippers=bool(get("command_grippers").value),
         )
         self._deadline = (
