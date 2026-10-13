@@ -276,6 +276,22 @@ def test_a_negative_effort_threshold_is_rejected():
         Until.parse({"timeout_s": 60, "effort": -1.0, "side": "left"}, "until")
 
 
+def test_min_finger_parses_on_a_closed_grasp():
+    until = Until.parse(
+        {"timeout_s": 40, "grasp": "closed", "side": "left", "min_finger": 0.005}, "u"
+    )
+    assert until.min_finger == 0.005
+
+
+def test_min_finger_needs_a_closed_grasp():
+    with pytest.raises(MissionError, match="grasp must be closed"):
+        Until.parse({"timeout_s": 40, "min_finger": 0.005}, "u")
+    with pytest.raises(MissionError, match="grasp must be closed"):
+        Until.parse(
+            {"timeout_s": 40, "grasp": "open", "side": "right", "min_finger": 0.005}, "u"
+        )
+
+
 def test_a_sensor_condition_means_the_timeout_is_a_failure():
     """With no early condition, running the clock out is the intended end. With
     one, it is a failure -- and that must hold for the new conditions too."""
