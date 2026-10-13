@@ -323,6 +323,13 @@ class Until:
     # pick finishes with the object lifted clear of the tote, and no gripper
     # reading or motion threshold says that, but the joint angles do.
     envelope: Optional[str] = None
+    # The least a `grasp: closed` finger may read and still count as holding
+    # something. A gripper that closes on air shuts further than on any object:
+    # empty closes read 0.0006-0.0017 m on the robot, a held lipstick or oil
+    # never below 0.0085. Without this floor a missed grasp followed by a lift
+    # passes as a pick. Leave unset for a soft object -- a held tissue reads
+    # down to 0.0028.
+    min_finger: Optional[float] = None
     operator: bool = False
     hold_s: float = 0.5
 
@@ -338,6 +345,7 @@ class Until:
             "effort",
             "signal",
             "envelope",
+            "min_finger",
             "operator",
             "hold_s",
         }
@@ -381,6 +389,15 @@ class Until:
                 where,
                 "envelope must be the name of an entry in arm_envelopes_file",
             )
+        min_finger = raw.get("min_finger")
+        if min_finger is not None:
+            min_finger = _as_float(min_finger, where, "min_finger")
+            _require(min_finger > 0, where, "min_finger must be positive (metres)")
+            _require(
+                grasp == "closed",
+                where,
+                "min_finger is the floor of a closed grasp, so grasp must be closed",
+            )
         signal = raw.get("signal")
         if signal is not None:
             _require(
@@ -417,6 +434,7 @@ class Until:
             effort=effort,
             signal=signal,
             envelope=envelope,
+            min_finger=min_finger,
             operator=operator,
             hold_s=hold,
         )
@@ -458,6 +476,10 @@ class Step:
     # drive with -- holding the object, arms clear of the chassis. It is a claim
     # about the checkpoint, so the lint believes it and check_arms verifies it.
     ends_parked: bool = False
+    # park_arms only: move the arms for THIS park even when enable_park is
+    # false. Lets one mission take the arms to its start pose without switching
+    # on every park_arms in every other mission.
+    park_enable: bool = False
 
     def describe(self) -> str:
         if self.kind == "navigate":
@@ -468,7 +490,8 @@ class Step:
             tail = " (ends parked)" if self.ends_parked else ""
             return f"run_policy {self.policy}{tail}"
         if self.kind == "park_arms":
-            return f"park_arms [{self.profile}]"
+            forced = " (enabled by the mission)" if self.park_enable else ""
+            return f"park_arms [{self.profile}]{forced}"
         if self.kind == "check_arms":
             return f"check_arms [{self.envelope}]"
         return f"wait {self.seconds}s"
@@ -483,7 +506,7 @@ class Step:
             "navigate": {"station"},
             "move_base": {"to", "axis"},
             "run_policy": {"policy", "until", "ends_parked"},
-            "park_arms": {"profile"},
+            "park_arms": {"profile", "enable"},
             "check_arms": {"envelope", "seconds"},
             "wait": {"seconds"},
         }[kind]
@@ -505,7 +528,7 @@ class Step:
 
         station = position = policy = profile = envelope = seconds = until = None
         axis = "lateral"
-        ends_parked = False
+        ends_parked = park_enable = False
         if kind == "navigate":
             station = raw.get("station")
             _require(isinstance(station, str) and station, where, "navigate needs station")
@@ -538,6 +561,8 @@ class Step:
                 )
         elif kind == "park_arms":
             profile = str(raw.get("profile", "travel"))
+            park_enable = raw.get("enable", False)
+            _require(isinstance(park_enable, bool), where, "enable must be true or false")
         elif kind == "check_arms":
             envelope = str(raw.get("envelope", ""))
             _require(bool(envelope), where, "check_arms needs an envelope name")
@@ -561,6 +586,7 @@ class Step:
             on_fail=on_fail,
             retries=retries,
             ends_parked=ends_parked,
+            park_enable=park_enable,
         )
 
 
