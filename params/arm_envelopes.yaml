@@ -217,32 +217,29 @@ envelopes:
       left gripper closed on it. Ends the atomic missions' picks (with grasp:
       closed, left) and is checked before a drive with the object in hand.
 
-      LENIENT, MEASURED 2026-10-13 from the atomic dataset itself (data/, 450
-      episodes; 0-149 picks, 150-299 transfers): min..max of the last 1 s of all
-      150 picks UNION the first frame of all 150 transfers, left arm widened by
-      0.30 rad, right arm by 0.40. The one joint that says "lifted" is the left
-      elbow (joint4): it reads at most 1.38 when the left gripper first closes,
-      down in the tote, and at least 1.65 at a pick's end, so its lower bound
-      sits between them at 1.40 rather than at the measured minimum. Replayed
-      with grasp: closed (left), hold 0.5 s: fires in 150/150 picks at a median
-      83% of the episode.
+      LEFT ARM -- RESTORED 2026-10-16 to the bounds measured on 2026-10-12 (the
+      old `carry` UNION the transfer starts, p1..p99 + 0.15). The lenient
+      version of 2026-10-13 let the left elbow (joint4) pass from 1.40, so the
+      pick ended before the arm had lifted: on the robot the object was carried
+      low and sometimes hit the next tote during the drive. joint4 >= 1.68 is
+      the lift: the demonstrations never close the gripper above 1.38 and
+      always end a pick at 1.65 or more.
 
-      Why lenient: on 2026-10-13 the oil pick held the object, lifted, and then
-      sat for 10 s until its timeout because the idle right arm had drifted to
-      joint5 = +0.925 (the old bound stopped at +0.755). The right arm does
-      nothing during a pick, so it is only bounded loosely here.
+      RIGHT ARM -- still the lenient 2026-10-13 bounds (min..max of the atomic
+      dataset's pick ends and transfer starts, +0.40). The right arm is idle
+      during a pick; on 2026-10-13 it drifted to joint5 = +0.925 and the old
+      +0.755 bound held a finished oil pick until its timeout.
 
-      The leniency is only safe together with `min_finger` on the pick step: in
-      the same run the oil pick closed on air twice (0.0017, 0.0006 m) and lifted
-      to joint4 = 1.56 each time -- inside this envelope.
+      Used with `min_finger` on the lipstick and oil picks, so a close on air
+      followed by a lift does not count as a pick.
     joints:
-      openarm_left_joint1:         [-0.860, +0.468]
-      openarm_left_joint2:         [-0.862, +0.183]
-      openarm_left_joint3:         [-0.601, +0.539]
-      openarm_left_joint4:         [+1.400, +2.533]
-      openarm_left_joint5:         [-1.006, +0.194]
-      openarm_left_joint6:         [-0.685, +0.446]
-      openarm_left_joint7:         [-0.334, +1.175]
+      openarm_left_joint1:         [-0.494, +0.366]
+      openarm_left_joint2:         [-0.664, +0.033]
+      openarm_left_joint3:         [-0.529, +0.282]
+      openarm_left_joint4:         [+1.680, +2.405]
+      openarm_left_joint5:         [-0.781, +0.021]
+      openarm_left_joint6:         [-0.474, +0.262]
+      openarm_left_joint7:         [-0.164, +0.827]
       openarm_left_finger_joint1:  [+0.000, +0.025]
       openarm_right_joint1:        [-0.427, +0.570]
       openarm_right_joint2:        [-0.395, +0.599]
